@@ -1,12 +1,11 @@
 import streamlit as st
-import cv2
-import numpy as np
-from PIL import Image
 import requests
+from PIL import Image
 from io import BytesIO
 import time
+import numpy as np
 
-# App title and configuration
+# App configuration
 st.set_page_config(page_title="Live CCTV Feed", layout="wide")
 st.title("Live CCTV Monitoring")
 
@@ -14,22 +13,13 @@ st.title("Live CCTV Monitoring")
 with st.sidebar:
     st.header("Configuration")
     # Replace with your Cloudflare tunnel URL
-    feed_url = st.text_input("CCTV Feed URL", "https://cctv.yourdomain.com/video_feed")
+    feed_url = st.text_input(
+        "CCTV Feed URL", 
+        "https://cctv.yourdomain.com/video_feed",
+        help="URL for your MJPEG stream or snapshot endpoint"
+    )
     refresh_rate = st.slider("Refresh rate (seconds)", 0.1, 5.0, 0.5, 0.1)
     show_fps = st.checkbox("Show FPS counter", True)
-
-# Function to fetch frame from CCTV feed
-def get_frame(url):
-    try:
-        response = requests.get(url, stream=True, timeout=5)
-        if response.status_code == 200:
-            image_bytes = BytesIO(response.content)
-            img = Image.open(image_bytes)
-            return np.array(img)
-        return None
-    except Exception as e:
-        st.warning(f"Error fetching frame: {str(e)}")
-        return None
 
 # Main display area
 frame_placeholder = st.empty()
@@ -41,6 +31,17 @@ prev_time = time.time()
 frame_count = 0
 current_fps = 0
 
+# Function to fetch frame from CCTV feed
+def get_frame(url):
+    try:
+        response = requests.get(url, stream=True, timeout=5)
+        if response.status_code == 200:
+            return Image.open(BytesIO(response.content))
+        return None
+    except Exception as e:
+        st.warning(f"Error fetching frame: {str(e)}")
+        return None
+
 # Main loop for displaying video
 while True:
     start_time = time.time()
@@ -49,12 +50,8 @@ while True:
     frame = get_frame(feed_url)
     
     if frame is not None:
-        # Convert color space if needed (BGR to RGB)
-        if len(frame.shape) == 3 and frame.shape[2] == 3:  # Color image
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        
         # Display the frame
-        frame_placeholder.image(frame, channels="RGB", use_column_width=True)
+        frame_placeholder.image(frame, use_column_width=True)
         status_text.success("Connected to CCTV feed")
     else:
         status_text.error("Unable to fetch frame from CCTV")
