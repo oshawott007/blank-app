@@ -13,7 +13,7 @@ page = st.sidebar.radio("Go to", ["Home", "About", "Contact", "Calculator"])
 
 # Home page
 if page == "Home":
-    st.title("Welcome to My Website! 👋")
+    st.title("Welcome to My Website Nigga! 👋")
     st.write("""
     This is a simple website built with Streamlit.
     Use the sidebar to navigate between different pages.
