@@ -1,71 +1,93 @@
 import streamlit as st
-import requests
-from PIL import Image
-from io import BytesIO
-import time
-import numpy as np
 
-# App configuration
-st.set_page_config(page_title="Live CCTV Feed", layout="wide")
-st.title("Live CCTV Monitoring")
+# Set page config
+st.set_page_config(
+    page_title="My Simple Website",
+    page_icon="🌐",
+    layout="wide"
+)
 
-# Configuration section in sidebar
-with st.sidebar:
-    st.header("Configuration")
-    # Replace with your Cloudflare tunnel URL
-    feed_url = st.text_input(
-        "CCTV Feed URL", 
-        "https://cctv.yourdomain.com/video_feed",
-        help="URL for your MJPEG stream or snapshot endpoint"
-    )
-    refresh_rate = st.slider("Refresh rate (seconds)", 0.1, 5.0, 0.5, 0.1)
-    show_fps = st.checkbox("Show FPS counter", True)
+# Sidebar navigation
+st.sidebar.title("Navigation")
+page = st.sidebar.radio("Go to", ["Home", "About", "Contact", "Calculator"])
 
-# Main display area
-frame_placeholder = st.empty()
-fps_placeholder = st.empty()
-status_text = st.empty()
-
-# Initialize FPS calculation
-prev_time = time.time()
-frame_count = 0
-current_fps = 0
-
-# Function to fetch frame from CCTV feed
-def get_frame(url):
-    try:
-        response = requests.get(url, stream=True, timeout=5)
-        if response.status_code == 200:
-            return Image.open(BytesIO(response.content))
-        return None
-    except Exception as e:
-        st.warning(f"Error fetching frame: {str(e)}")
-        return None
-
-# Main loop for displaying video
-while True:
-    start_time = time.time()
+# Home page
+if page == "Home":
+    st.title("Welcome to My Website! 👋")
+    st.write("""
+    This is a simple website built with Streamlit.
+    Use the sidebar to navigate between different pages.
+    """)
     
-    # Get frame from CCTV feed
-    frame = get_frame(feed_url)
+    st.image("https://streamlit.io/images/brand/streamlit-logo-secondary-colormark-darktext.png", 
+             width=300)
     
-    if frame is not None:
-        # Display the frame
-        frame_placeholder.image(frame, use_column_width=True)
-        status_text.success("Connected to CCTV feed")
-    else:
-        status_text.error("Unable to fetch frame from CCTV")
+    st.subheader("Features")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.write("✅ Easy to use")
+    with col2:
+        st.write("🚀 Fast deployment")
+    with col3:
+        st.write("💻 Python-powered")
+
+# About page
+elif page == "About":
+    st.title("About This Website")
+    st.write("""
+    This website demonstrates how to create a multi-page app using Streamlit.
+    Streamlit is an open-source Python library that makes it easy to create 
+    and share beautiful, custom web apps for machine learning and data science.
+    """)
     
-    # Calculate and display FPS
-    frame_count += 1
-    if time.time() - prev_time >= 1.0:  # Update FPS every second
-        current_fps = frame_count / (time.time() - prev_time)
-        frame_count = 0
-        prev_time = time.time()
+    st.subheader("Technologies Used")
+    st.markdown("""
+    - Python
+    - Streamlit
+    - Pandas
+    - Matplotlib
+    """)
+
+# Contact page
+elif page == "Contact":
+    st.title("Contact Us")
     
-    if show_fps:
-        fps_placeholder.metric("FPS", f"{current_fps:.1f}")
+    with st.form("contact_form"):
+        name = st.text_input("Name")
+        email = st.text_input("Email")
+        message = st.text_area("Message")
+        submitted = st.form_submit_button("Submit")
+        
+        if submitted:
+            st.success(f"Thank you {name}! We'll get back to you soon.")
+
+# Calculator page
+elif page == "Calculator":
+    st.title("Simple Calculator")
     
-    # Control refresh rate
-    elapsed_time = time.time() - start_time
-    time.sleep(max(0, refresh_rate - elapsed_time))
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        num1 = st.number_input("Enter first number", value=0)
+    
+    with col2:
+        num2 = st.number_input("Enter second number", value=0)
+    
+    operation = st.selectbox("Select operation", 
+                            ["Add", "Subtract", "Multiply", "Divide"])
+    
+    if st.button("Calculate"):
+        if operation == "Add":
+            result = num1 + num2
+        elif operation == "Subtract":
+            result = num1 - num2
+        elif operation == "Multiply":
+            result = num1 * num2
+        elif operation == "Divide":
+            result = num1 / num2 if num2 != 0 else "Cannot divide by zero"
+        
+        st.success(f"Result: {result}")
+
+# Footer
+st.sidebar.markdown("---")
+st.sidebar.markdown("Built with ❤️ using Streamlit")
