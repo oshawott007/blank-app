@@ -2,7 +2,7 @@ import streamlit as st
 
 # Set page config
 st.set_page_config(
-    page_title="My Simple Website",
+    page_title="My Simple Website Nigga",
     page_icon="🌐",
     layout="wide"
 )
@@ -19,8 +19,8 @@ if page == "Home":
     Use the sidebar to navigate between different pages.
     """)
     
-    st.image("https://streamlit.io/images/brand/streamlit-logo-secondary-colormark-darktext.png", 
-             width=300)
+    # st.image("https://streamlit.io/images/brand/streamlit-logo-secondary-colormark-darktext.png", 
+    #          width=300)
     
     st.subheader("Features")
     col1, col2, col3 = st.columns(3)
