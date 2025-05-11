@@ -1,3 +1,4 @@
+
 # import streamlit as st
 # import requests
 # from PIL import Image
@@ -40,10 +41,7 @@
 
 # # Initialize session state for camera info
 # if 'cameras' not in st.session_state:
-#     st.session_state.cameras = [{
-#         "name": "Default Camera", 
-#         "url": "http://218.219.214.248:50000/nphMotionJpeg?Resolution=640x480"
-#     }]
+#     st.session_state.cameras = []  # Start with empty camera list
 
 # # App title
 # st.title("IP Camera Viewer")
@@ -67,104 +65,115 @@
 #         st.session_state.cameras.append(new_camera)
 #         st.experimental_rerun()
 
-# # Display refresh rate slider
-# refresh_rate = st.slider("Refresh Rate (seconds)", min_value=1, max_value=10, value=3)
-# st.write(f"Frames will refresh every {refresh_rate} seconds")
-
-# # Auto-refresh mechanism
-# if st.button("Start Auto-refresh") or ('auto_refresh' in st.session_state and st.session_state.auto_refresh):
-#     st.session_state.auto_refresh = True
-#     st.write("Auto-refresh is ON. Click 'Stop Auto-refresh' to disable.")
-#     # Add current timestamp to force refresh on each rerun
-#     st.empty().text(f"Last refresh: {datetime.now().strftime('%H:%M:%S')}")
-#     auto_refresh = True
-# else:
-#     auto_refresh = False
-
-# if st.button("Stop Auto-refresh"):
-#     st.session_state.auto_refresh = False
-#     st.write("Auto-refresh stopped.")
-#     auto_refresh = False
-
-# # Manual refresh button
-# if st.button("Manual Refresh"):
-#     st.write(f"Manually refreshed at {datetime.now().strftime('%H:%M:%S')}")
-
-# # Option to remove cameras
-# if len(st.session_state.cameras) > 1:  # Keep at least one camera
-#     st.subheader("Remove Camera")
-#     camera_names = [cam["name"] for cam in st.session_state.cameras]
-#     camera_to_remove = st.selectbox("Select camera to remove", camera_names)
+# # Camera table display
+# if st.session_state.cameras:
+#     st.subheader("Camera List")
     
-#     if st.button("Remove Selected Camera"):
-#         for i, cam in enumerate(st.session_state.cameras):
-#             if cam["name"] == camera_to_remove:
+#     # Create header row for our custom table
+#     header_cols = st.columns([2, 4, 1])
+#     with header_cols[0]:
+#         st.markdown("**Camera Name**")
+#     with header_cols[1]:
+#         st.markdown("**Camera URL**")
+#     with header_cols[2]:
+#         st.markdown("**Action**")
+    
+#     st.markdown("---")  # Divider
+    
+#     # Create rows for each camera
+#     for i, camera in enumerate(st.session_state.cameras):
+#         cols = st.columns([2, 4, 1])
+#         with cols[0]:
+#             st.write(camera["name"])
+#         with cols[1]:
+#             st.write(camera["url"])
+#         with cols[2]:
+#             # Unique key for each button to avoid conflicts
+#             if st.button("Remove", key=f"remove_btn_{i}"):
 #                 st.session_state.cameras.pop(i)
 #                 st.experimental_rerun()
-#                 break
+
+# # Auto-refresh mechanism
+# if 'auto_refresh' not in st.session_state:
+#     st.session_state.auto_refresh = True  # Enable auto-refresh by default
+
+# # Fixed refresh rate (3 seconds)
+# refresh_rate = 3
+
+# # Manual refresh button alongside auto-refresh toggle
+# col1, col2 = st.columns(2)
+# with col1:
+#     if st.button("Manual Refresh"):
+#         st.write(f"Manually refreshed at {datetime.now().strftime('%H:%M:%S')}")
+
+# with col2:
+#     auto_refresh = st.toggle("Auto-refresh", value=st.session_state.auto_refresh)
+#     st.session_state.auto_refresh = auto_refresh
+
+# # If auto-refresh is on, show timestamp
+# if auto_refresh:
+#     st.empty().text(f"Last refresh: {datetime.now().strftime('%H:%M:%S')}")
 
 # # Display cameras - two per row
-# st.subheader("Camera Feeds")
-
-# # Calculate number of rows needed
-# num_cameras = len(st.session_state.cameras)
-# num_rows = (num_cameras + 1) // 2  # Round up division
-
-# for row in range(num_rows):
-#     cols = st.columns(2)
+# if st.session_state.cameras:
+#     st.subheader("Camera Feeds")
     
-#     # First camera in row
-#     idx = row * 2
-#     if idx < num_cameras:
-#         with cols[0]:
-#             camera = st.session_state.cameras[idx]
-#             st.markdown(f"### {camera['name']}")
-#             status = st.empty()
-#             frame_place = st.empty()
-            
-#             # Get and display frame
-#             frame_data, error = get_mjpeg_frame(camera['url'])
-#             if frame_data:
-#                 try:
-#                     image = Image.open(io.BytesIO(frame_data))
-#                     frame_place.image(image, use_column_width=True)
-#                     status.success("Connected")
-#                 except Exception as e:
-#                     status.error(f"Error displaying image: {str(e)}")
-#             else:
-#                 status.error(f"Failed to get frame: {error}")
+#     # Calculate number of rows needed
+#     num_cameras = len(st.session_state.cameras)
+#     num_rows = (num_cameras + 1) // 2  # Round up division
     
-#     # Second camera in row
-#     idx = row * 2 + 1
-#     if idx < num_cameras:
-#         with cols[1]:
-#             camera = st.session_state.cameras[idx]
-#             st.markdown(f"### {camera['name']}")
-#             status = st.empty()
-#             frame_place = st.empty()
-            
-#             # Get and display frame
-#             frame_data, error = get_mjpeg_frame(camera['url'])
-#             if frame_data:
-#                 try:
-#                     image = Image.open(io.BytesIO(frame_data))
-#                     frame_place.image(image, use_column_width=True)
-#                     status.success("Connected")
-#                 except Exception as e:
-#                     status.error(f"Error displaying image: {str(e)}")
-#             else:
-#                 status.error(f"Failed to get frame: {error}")
+#     for row in range(num_rows):
+#         cols = st.columns(2)
+        
+#         # First camera in row
+#         idx = row * 2
+#         if idx < num_cameras:
+#             with cols[0]:
+#                 camera = st.session_state.cameras[idx]
+#                 st.markdown(f"### {camera['name']}")
+#                 status = st.empty()
+#                 frame_place = st.empty()
+                
+#                 # Get and display frame
+#                 frame_data, error = get_mjpeg_frame(camera['url'])
+#                 if frame_data:
+#                     try:
+#                         image = Image.open(io.BytesIO(frame_data))
+#                         frame_place.image(image, use_column_width=True)
+#                         status.success("Connected")
+#                     except Exception as e:
+#                         status.error(f"Error displaying image: {str(e)}")
+#                 else:
+#                     status.error(f"Failed to get frame: {error}")
+        
+#         # Second camera in row
+#         idx = row * 2 + 1
+#         if idx < num_cameras:
+#             with cols[1]:
+#                 camera = st.session_state.cameras[idx]
+#                 st.markdown(f"### {camera['name']}")
+#                 status = st.empty()
+#                 frame_place = st.empty()
+                
+#                 # Get and display frame
+#                 frame_data, error = get_mjpeg_frame(camera['url'])
+#                 if frame_data:
+#                     try:
+#                         image = Image.open(io.BytesIO(frame_data))
+#                         frame_place.image(image, use_column_width=True)
+#                         status.success("Connected")
+#                     except Exception as e:
+#                         status.error(f"Error displaying image: {str(e)}")
+#                 else:
+#                     status.error(f"Failed to get frame: {error}")
+# else:
+#     st.info("No cameras added yet. Please add a camera using the form above.")
 
 # # Set up auto-refresh if enabled
 # if auto_refresh:
-#     st.write(f"Next refresh in {refresh_rate} seconds...")
 #     # This will cause the app to rerun after the specified interval
 #     time.sleep(refresh_rate)
 #     st.experimental_rerun()
-
-
-
-
 
 
 import streamlit as st
@@ -173,6 +182,7 @@ from PIL import Image
 import io
 import time
 from datetime import datetime
+import base64
 
 # Function to get a single frame from MJPEG stream
 def get_mjpeg_frame(url, timeout=5):
@@ -207,9 +217,35 @@ def get_mjpeg_frame(url, timeout=5):
     except Exception as e:
         return None, f"Error: {str(e)}"
 
+# Function to convert image bytes to base64 for embedding in HTML
+def image_to_base64(image_bytes):
+    return base64.b64encode(image_bytes).decode('utf-8')
+
+# Create HTML with auto-refresh for the image
+def create_auto_refresh_html(img_base64, camera_name, refresh_rate=3):
+    html = f"""
+    <div style="text-align: center;">
+        <h3>{camera_name}</h3>
+        <img src="data:image/jpeg;base64,{img_base64}" style="max-width: 100%;">
+        <script>
+            // This script will refresh just the image, not the whole page
+            setInterval(function() {{
+                var timestamp = new Date().getTime();
+                document.querySelector('img').src = 
+                    "data:image/jpeg;base64,{img_base64}?" + timestamp;
+            }}, {refresh_rate * 1000});
+        </script>
+    </div>
+    """
+    return html
+
 # Initialize session state for camera info
 if 'cameras' not in st.session_state:
     st.session_state.cameras = []  # Start with empty camera list
+
+# Initialize last refresh time if not present
+if 'last_refresh' not in st.session_state:
+    st.session_state.last_refresh = datetime.now()
 
 # App title
 st.title("IP Camera Viewer")
@@ -226,12 +262,23 @@ with st.form("add_camera_form"):
     submit_button = st.form_submit_button("Add Camera")
     
     if submit_button and camera_name and camera_url:
-        new_camera = {
-            "name": camera_name,
-            "url": camera_url
-        }
-        st.session_state.cameras.append(new_camera)
-        st.experimental_rerun()
+        # Check if camera with same name already exists
+        exists = False
+        for cam in st.session_state.cameras:
+            if cam["name"] == camera_name:
+                exists = True
+                break
+                
+        if not exists:
+            new_camera = {
+                "name": camera_name,
+                "url": camera_url,
+                "last_frame": None,
+                "status": "Connecting..."
+            }
+            st.session_state.cameras.append(new_camera)
+        else:
+            st.error(f"Camera with name '{camera_name}' already exists!")
 
 # Camera table display
 if st.session_state.cameras:
@@ -261,26 +308,36 @@ if st.session_state.cameras:
                 st.session_state.cameras.pop(i)
                 st.experimental_rerun()
 
-# Auto-refresh mechanism
-if 'auto_refresh' not in st.session_state:
-    st.session_state.auto_refresh = True  # Enable auto-refresh by default
+# Refresh control
+refresh_rate = 3  # Fixed at 3 seconds
 
-# Fixed refresh rate (3 seconds)
-refresh_rate = 3
-
-# Manual refresh button alongside auto-refresh toggle
 col1, col2 = st.columns(2)
 with col1:
-    if st.button("Manual Refresh"):
-        st.write(f"Manually refreshed at {datetime.now().strftime('%H:%M:%S')}")
+    if st.button("Refresh All Cameras Now"):
+        st.session_state.last_refresh = datetime.now()
+        # We'll update frames but no rerun
 
 with col2:
-    auto_refresh = st.toggle("Auto-refresh", value=st.session_state.auto_refresh)
-    st.session_state.auto_refresh = auto_refresh
+    # Show last refresh time
+    st.write(f"Last updated: {st.session_state.last_refresh.strftime('%H:%M:%S')}")
 
-# If auto-refresh is on, show timestamp
-if auto_refresh:
-    st.empty().text(f"Last refresh: {datetime.now().strftime('%H:%M:%S')}")
+# Check if enough time has passed for refresh
+current_time = datetime.now()
+time_diff = (current_time - st.session_state.last_refresh).total_seconds()
+
+# Update frames if refresh is due
+if time_diff >= refresh_rate:
+    # Update the last refresh time
+    st.session_state.last_refresh = current_time
+    
+    # Update all camera frames
+    for i, camera in enumerate(st.session_state.cameras):
+        frame_data, error = get_mjpeg_frame(camera['url'])
+        if frame_data:
+            st.session_state.cameras[i]["last_frame"] = frame_data
+            st.session_state.cameras[i]["status"] = "Connected"
+        else:
+            st.session_state.cameras[i]["status"] = f"Error: {error}"
 
 # Display cameras - two per row
 if st.session_state.cameras:
@@ -302,17 +359,31 @@ if st.session_state.cameras:
                 status = st.empty()
                 frame_place = st.empty()
                 
-                # Get and display frame
-                frame_data, error = get_mjpeg_frame(camera['url'])
-                if frame_data:
-                    try:
+                # Show status
+                if camera["status"] == "Connected":
+                    status.success("Connected")
+                else:
+                    status.warning(camera["status"])
+                
+                # Display frame if available
+                if camera["last_frame"] is None:
+                    # Try to get first frame
+                    frame_data, error = get_mjpeg_frame(camera['url'])
+                    if frame_data:
+                        st.session_state.cameras[idx]["last_frame"] = frame_data
+                        st.session_state.cameras[idx]["status"] = "Connected"
                         image = Image.open(io.BytesIO(frame_data))
                         frame_place.image(image, use_column_width=True)
                         status.success("Connected")
+                    else:
+                        status.error(f"Failed to get frame: {error}")
+                else:
+                    # Display the cached frame
+                    try:
+                        image = Image.open(io.BytesIO(camera["last_frame"]))
+                        frame_place.image(image, use_column_width=True)
                     except Exception as e:
                         status.error(f"Error displaying image: {str(e)}")
-                else:
-                    status.error(f"Failed to get frame: {error}")
         
         # Second camera in row
         idx = row * 2 + 1
@@ -323,22 +394,33 @@ if st.session_state.cameras:
                 status = st.empty()
                 frame_place = st.empty()
                 
-                # Get and display frame
-                frame_data, error = get_mjpeg_frame(camera['url'])
-                if frame_data:
-                    try:
+                # Show status
+                if camera["status"] == "Connected":
+                    status.success("Connected")
+                else:
+                    status.warning(camera["status"])
+                
+                # Display frame if available
+                if camera["last_frame"] is None:
+                    # Try to get first frame
+                    frame_data, error = get_mjpeg_frame(camera['url'])
+                    if frame_data:
+                        st.session_state.cameras[idx]["last_frame"] = frame_data
+                        st.session_state.cameras[idx]["status"] = "Connected"
                         image = Image.open(io.BytesIO(frame_data))
                         frame_place.image(image, use_column_width=True)
                         status.success("Connected")
+                    else:
+                        status.error(f"Failed to get frame: {error}")
+                else:
+                    # Display the cached frame
+                    try:
+                        image = Image.open(io.BytesIO(camera["last_frame"]))
+                        frame_place.image(image, use_column_width=True)
                     except Exception as e:
                         status.error(f"Error displaying image: {str(e)}")
-                else:
-                    status.error(f"Failed to get frame: {error}")
 else:
     st.info("No cameras added yet. Please add a camera using the form above.")
 
-# Set up auto-refresh if enabled
-if auto_refresh:
-    # This will cause the app to rerun after the specified interval
-    time.sleep(refresh_rate)
-    st.experimental_rerun()
+# Update every few seconds but avoid complete page rerun
+time.sleep(1)  # Short sleep to prevent hogging resources
