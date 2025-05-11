@@ -265,16 +265,17 @@
 import streamlit as st
 import logging
 import threading
+import time
+import cv2
 from pymongo import MongoClient
 from pymongo.errors import ServerSelectionTimeoutError, ConnectionFailure
 from bson import ObjectId
-import cv2
-import time
 from fire_detection import fire_detection_loop
 from occupancy_detection import occupancy_detection_loop
 from no_access_rooms import no_access_detection_loop
 
-logging.basicConfig(level=logging.INFO)
+# Configure logging for debugging
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # MongoDB Atlas connection
@@ -310,30 +311,49 @@ def add_camera_to_db(name, address):
         st.error("MongoDB not connected. Cannot add camera.")
         return None
     camera = {"name": name, "address": address}
-    cameras_collection.insert_one(camera)
-    return camera
+    try:
+        result = cameras_collection.insert_one(camera)
+        camera['_id'] = result.inserted_id
+        return camera
+    except Exception as e:
+        st.error(f"Failed to add camera to MongoDB: {str(e)}")
+        logger.error(f"MongoDB insert error: {str(e)}")
+        return None
 
 def get_cameras_from_db():
     """Retrieve all cameras from MongoDB."""
     if client is None:
         return []
-    return list(cameras_collection.find())
+    try:
+        return list(cameras_collection.find())
+    except Exception as e:
+        st.error(f"Failed to retrieve cameras: {str(e)}")
+        logger.error(f"MongoDB retrieve error: {str(e)}")
+        return []
 
 def remove_camera_from_db(camera_id):
     """Remove a camera from MongoDB by its ID."""
     if client is None:
         st.error("MongoDB not connected. Cannot remove camera.")
         return
-    cameras_collection.delete_one({"_id": ObjectId(camera_id)})
+    try:
+        cameras_collection.delete_one({"_id": ObjectId(camera_id)})
+    except Exception as e:
+        st.error(f"Failed to remove camera: {str(e)}")
+        logger.error(f"MongoDB delete error: {str(e)}")
 
 # Utility Functions
 def add_camera(name, address):
-    """Add a camera to MongoDB and update session state."""
+    """Add a camera to MongoDB and start its stream."""
     if not name or not address:
         st.error("Camera name and address are required.")
         return
     if any(cam['name'] == name for cam in st.session_state.cameras):
         st.error("Camera name must be unique.")
+        return
+    # Basic URL validation
+    if not (address.startswith("rtsp://") or address.startswith("http://") or address.startswith("https://")):
+        st.error("Invalid URL format. Use rtsp:// or http(s)://")
         return
     camera = add_camera_to_db(name, address)
     if camera:
@@ -342,67 +362,86 @@ def add_camera(name, address):
         st.session_state[f"stream_active_{camera_id}"] = True
         start_stream(camera['address'], camera_id)
         st.success(f"Added camera: {name}")
+        logger.info(f"Added camera {name} with address {address}")
 
 def remove_camera(index):
-    """Remove a camera from MongoDB and update session state."""
+    """Remove a camera from MongoDB and stop its stream."""
     if 0 <= index < len(st.session_state.cameras):
         camera = st.session_state.cameras[index]
         camera_id = str(camera['_id'])
         if st.session_state.get(f"stream_active_{camera_id}", False):
             st.session_state[f"stream_active_{camera_id}"] = False
+            logger.info(f"Stopped stream for camera {camera['name']}")
         remove_camera_from_db(camera['_id'])
         st.session_state.cameras.pop(index)
         st.session_state.confirm_remove = None
         st.success(f"Removed camera: {camera['name']}")
+        logger.info(f"Removed camera {camera['name']}")
 
 # Video Streaming Functions
 def capture_frame(address, camera_id):
     """Capture frames from a camera stream and update session state."""
+    logger.debug(f"Attempting to open stream for camera_id {camera_id} at {address}")
     cap = cv2.VideoCapture(address)
     if not cap.isOpened():
-        st.session_state[f"stream_error_{camera_id}"] = "Failed to connect to camera stream."
+        st.session_state[f"stream_error_{camera_id}"] = f"Failed to connect to stream at {address}. Check URL or network."
+        logger.error(f"Failed to open stream for camera_id {camera_id} at {address}")
         return
+    logger.debug(f"Stream opened successfully for camera_id {camera_id}")
     while st.session_state.get(f"stream_active_{camera_id}", False):
         ret, frame = cap.read()
         if not ret:
-            st.session_state[f"stream_error_{camera_id}"] = "Failed to capture frame."
+            st.session_state[f"stream_error_{camera_id}"] = "Failed to capture frame. Stream may be unavailable."
+            logger.error(f"Failed to capture frame for camera_id {camera_id}")
             break
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         st.session_state[f"frame_{camera_id}"] = frame
         time.sleep(0.033)  # ~30 FPS
     cap.release()
+    logger.debug(f"Stream closed for camera_id {camera_id}")
 
 def start_stream(address, camera_id):
     """Start video stream in a separate thread."""
     if not st.session_state.get(f"stream_active_{camera_id}", False):
         st.session_state[f"stream_active_{camera_id}"] = True
         st.session_state[f"stream_error_{camera_id}"] = None
+        st.session_state[f"frame_{camera_id}"] = None
         threading.Thread(target=capture_frame, args=(address, camera_id), daemon=True).start()
+        logger.info(f"Started stream thread for camera_id {camera_id} at {address}")
 
 # ML Model Operations
 def run_fire_detection(address, camera_name):
     """Run fire detection for a specific camera."""
     try:
+        logger.info(f"Starting fire detection for {camera_name} at {address}")
         fire_detection_loop(address, camera_name)
         st.session_state[f"fire_result_{camera_name}"] = "Fire detection completed."
+        logger.info(f"Fire detection completed for {camera_name}")
     except Exception as e:
         st.session_state[f"fire_result_{camera_name}"] = f"Fire detection error: {str(e)}"
+        logger.error(f"Fire detection error for {camera_name}: {str(e)}")
 
 def run_occupancy_detection(address, camera_name):
     """Run occupancy detection for a specific camera."""
     try:
+        logger.info(f"Starting occupancy detection for {camera_name} at {address}")
         occupancy_detection_loop(address, camera_name)
         st.session_state[f"occ_result_{camera_name}"] = "Occupancy detection completed."
+        logger.info(f"Occupancy detection completed for {camera_name}")
     except Exception as e:
         st.session_state[f"occ_result_{camera_name}"] = f"Occupancy detection error: {str(e)}"
+        logger.error(f"Occupancy detection error for {camera_name}: {str(e)}")
 
 def run_no_access_detection(address, camera_name):
     """Run no-access room detection for a specific camera."""
     try:
+        logger.info(f"Starting no-access detection for {camera_name} at {address}")
         no_access_detection_loop(address, camera_name)
         st.session_state[f"no_access_result_{camera_name}"] = "No-access detection completed."
+        logger.info(f"No-access detection completed for {camera_name}")
     except Exception as e:
         st.session_state[f"no_access_result_{camera_name}"] = f"No-access detection error: {str(e)}"
+        logger.error(f"No-access detection error for {camera_name}: {str(e)}")
 
 # Initialize session state
 if 'cameras' not in st.session_state:
@@ -419,12 +458,12 @@ st.title("📷 V.I.G.I.LLL - Video Intelligence for General Identification and L
 
 # Camera Management
 st.header("📹 Camera Management")
-st.write("Add, remove, and manage surveillance cameras connected to the system.")
+st.write("Add, remove, and manage surveillance cameras. Provide a valid RTSP or HTTP stream URL to view live footage.")
 
 with st.expander("➕ Add New Camera", expanded=True):
     with st.form("add_camera_form"):
         name = st.text_input("Camera Name", help="A unique identifier for the camera")
-        address = st.text_input("Camera Address", help="RTSP or HTTP stream URL")
+        address = st.text_input("Camera Address", help="RTSP or HTTP stream URL (e.g., rtsp://your-camera-ip:554/stream)")
         submitted = st.form_submit_button("Add Camera")
         if submitted:
             if name and address:
