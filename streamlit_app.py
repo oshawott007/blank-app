@@ -267,12 +267,14 @@ import logging
 import threading
 import time
 import cv2
+import math
 from pymongo import MongoClient
 from pymongo.errors import ServerSelectionTimeoutError, ConnectionFailure
 from bson import ObjectId
-from fire_detection import fire_detection_loop
+from fire_detection import fire_detection_loop, fire_model, classnames
 from occupancy_detection import occupancy_detection_loop
 from no_access_rooms import no_access_detection_loop
+import cvzone
 
 # Configure logging for debugging
 logging.basicConfig(level=logging.DEBUG)
@@ -351,7 +353,6 @@ def add_camera(name, address):
     if any(cam['name'] == name for cam in st.session_state.cameras):
         st.error("Camera name must be unique.")
         return
-    # Basic URL validation
     if not (address.startswith("rtsp://") or address.startswith("http://") or address.startswith("https://")):
         st.error("Invalid URL format. Use rtsp:// or http(s)://")
         return
@@ -380,7 +381,7 @@ def remove_camera(index):
 
 # Video Streaming Functions
 def capture_frame(address, camera_id):
-    """Capture frames from a camera stream and update session state."""
+    """Capture and process frames from a camera stream."""
     logger.debug(f"Attempting to open stream for camera_id {camera_id} at {address}")
     cap = cv2.VideoCapture(address)
     if not cap.isOpened():
@@ -394,6 +395,8 @@ def capture_frame(address, camera_id):
             st.session_state[f"stream_error_{camera_id}"] = "Failed to capture frame. Stream may be unavailable."
             logger.error(f"Failed to capture frame for camera_id {camera_id}")
             break
+        # Process frame for display (resize and basic RGB conversion)
+        frame = cv2.resize(frame, (640, 480))
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         st.session_state[f"frame_{camera_id}"] = frame
         time.sleep(0.033)  # ~30 FPS
@@ -411,10 +414,38 @@ def start_stream(address, camera_id):
 
 # ML Model Operations
 def run_fire_detection(address, camera_name):
-    """Run fire detection for a specific camera."""
+    """Run fire detection on a camera stream."""
     try:
         logger.info(f"Starting fire detection for {camera_name} at {address}")
-        fire_detection_loop(address, camera_name)
+        cap = cv2.VideoCapture(address)
+        if not cap.isOpened():
+            raise Exception("Failed to open stream for fire detection")
+        while st.session_state.get(f"stream_active_{camera_name}", False):
+            ret, frame = cap.read()
+            if not ret:
+                raise Exception("Failed to capture frame for fire detection")
+            frame = cv2.resize(frame, (640, 480))
+            result = fire_model(frame, stream=True)
+            fire_or_smoke_detected = False
+            for info in result:
+                boxes = info.boxes
+                for box in boxes:
+                    confidence = box.conf[0]
+                    confidence = math.ceil(confidence * 100)
+                    Class = int(box.cls[0])
+                    if confidence > 80:
+                        x1, y1, x2, y2 = box.xyxy[0]
+                        x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 5)
+                        cvzone.putTextRect(frame, f'{classnames[Class]} {confidence}%', 
+                                         [x1 + 8, y1 + 100], scale=1.5, thickness=2)
+                        fire_or_smoke_detected = True
+                        cv2.putText(frame, "ALERT!", (50, 150), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            st.session_state[f"fire_frame_{camera_name}"] = frame if fire_or_smoke_detected else None
+            time.sleep(0.033)  # ~30 FPS
+        cap.release()
         st.session_state[f"fire_result_{camera_name}"] = "Fire detection completed."
         logger.info(f"Fire detection completed for {camera_name}")
     except Exception as e:
@@ -422,7 +453,7 @@ def run_fire_detection(address, camera_name):
         logger.error(f"Fire detection error for {camera_name}: {str(e)}")
 
 def run_occupancy_detection(address, camera_name):
-    """Run occupancy detection for a specific camera."""
+    """Run occupancy detection on a camera stream."""
     try:
         logger.info(f"Starting occupancy detection for {camera_name} at {address}")
         occupancy_detection_loop(address, camera_name)
@@ -433,7 +464,7 @@ def run_occupancy_detection(address, camera_name):
         logger.error(f"Occupancy detection error for {camera_name}: {str(e)}")
 
 def run_no_access_detection(address, camera_name):
-    """Run no-access room detection for a specific camera."""
+    """Run no-access room detection on a camera stream."""
     try:
         logger.info(f"Starting no-access detection for {camera_name} at {address}")
         no_access_detection_loop(address, camera_name)
@@ -520,7 +551,10 @@ else:
                     st.subheader(f"Camera: {cam['name']}")
                     stream_placeholder = st.empty()
                     if st.session_state.get(f"stream_active_{camera_id}", False):
-                        frame = st.session_state.get(f"frame_{camera_id}")
+                        # Display fire detection frame if available, else default stream frame
+                        fire_frame = st.session_state.get(f"fire_frame_{cam['name']}")
+                        default_frame = st.session_state.get(f"frame_{camera_id}")
+                        frame = fire_frame if fire_frame is not None else default_frame
                         error = st.session_state.get(f"stream_error_{camera_id}")
                         if error:
                             stream_placeholder.error(error)
