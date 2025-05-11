@@ -38,7 +38,7 @@ packaging==21.0 # Matches Streamlit's requirements
 
 # First upgrade pip
 pip>=25.0.1
-
+plotly>=5.0.0
 # Core packages
 streamlit==1.31.0
 pillow==10.3.0  # Version compatible with newer Streamlit
