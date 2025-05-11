@@ -257,16 +257,25 @@
 
 
 
+
+
+
+
+
+
+
+
 import streamlit as st
 import logging
 import threading
 import time
 import cv2
 import math
+import numpy as np
 from pymongo import MongoClient
 from pymongo.errors import ServerSelectionTimeoutError, ConnectionFailure
 from bson import ObjectId
-from fire_detection import fire_detection_loop, fire_model, classnames
+from fire_detection import fire_model, classnames
 from occupancy_detection import occupancy_detection_loop
 from no_access_rooms import no_access_detection_loop
 import cvzone
@@ -380,38 +389,49 @@ def remove_camera(index):
         logger.info(f"Removed camera {camera['name']}")
 
 # Video Streaming Functions
-def capture_frame(address, camera_id):
+def capture_frame(address, camera_id, camera_name):
     """Capture and process frames from a camera stream."""
-    logger.debug(f"Attempting to open stream for camera_id {camera_id} at {address}")
-    cap = cv2.VideoCapture(address)
-    if not cap.isOpened():
-        st.session_state[f"stream_error_{camera_id}"] = f"Failed to connect to stream at {address}. Check URL or network."
-        logger.error(f"Failed to open stream for camera_id {camera_id} at {address}")
-        return
-    logger.debug(f"Stream opened successfully for camera_id {camera_id}")
+    logger.debug(f"Attempting to open stream for {camera_name} at {address}")
     
+    # Set OpenCV parameters for better RTSP handling
+    cap = cv2.VideoCapture(address)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    cap.set(cv2.CAP_PROP_FPS, 20)
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+    
+    if not cap.isOpened():
+        st.session_state[f"stream_error_{camera_id}"] = f"Failed to connect to stream at {address}"
+        logger.error(f"Failed to open stream for {camera_name} at {address}")
+        return
+    
+    logger.debug(f"Stream opened successfully for {camera_name}")
     frame_queue = st.session_state.get(f"frame_queue_{camera_id}")
     
     while st.session_state.get(f"stream_active_{camera_id}", False):
         ret, frame = cap.read()
         if not ret:
-            st.session_state[f"stream_error_{camera_id}"] = "Failed to capture frame. Stream may be unavailable."
-            logger.error(f"Failed to capture frame for camera_id {camera_id}")
-            break
+            st.session_state[f"stream_error_{camera_id}"] = f"Connection lost for {camera_name}"
+            logger.error(f"Failed to capture frame for {camera_name}")
+            time.sleep(2)  # Wait before retrying
+            continue
         
-        frame = cv2.resize(frame, (640, 480))
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        try:
+            frame = cv2.resize(frame, (640, 480))
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            if frame_queue:
+                if frame_queue.full():
+                    frame_queue.get()  # Discard oldest frame
+                frame_queue.put(frame.copy())
+            
+            st.session_state[f"frame_{camera_id}"] = frame
+        except Exception as e:
+            logger.error(f"Error processing frame for {camera_name}: {str(e)}")
         
-        if frame_queue:
-            if frame_queue.full():
-                frame_queue.get()
-            frame_queue.put(frame.copy())
-        
-        st.session_state[f"frame_{camera_id}"] = frame
-        time.sleep(0.033)
+        time.sleep(0.033)  # ~30 FPS
     
     cap.release()
-    logger.debug(f"Stream closed for camera_id {camera_id}")
+    logger.debug(f"Stream closed for {camera_name}")
 
 def start_stream(address, camera_id):
     """Start video stream in a separate thread."""
@@ -419,10 +439,46 @@ def start_stream(address, camera_id):
         st.session_state[f"stream_active_{camera_id}"] = True
         st.session_state[f"stream_error_{camera_id}"] = None
         st.session_state[f"frame_{camera_id}"] = None
-        threading.Thread(target=capture_frame, args=(address, camera_id), daemon=True).start()
-        logger.info(f"Started stream thread for camera_id {camera_id} at {address}")
+        
+        camera_name = next((cam['name'] for cam in st.session_state.cameras 
+                          if str(cam['_id']) == camera_id), "Unknown Camera")
+        
+        threading.Thread(
+            target=capture_frame, 
+            args=(address, camera_id, camera_name),
+            daemon=True
+        ).start()
+        logger.info(f"Started stream thread for {camera_name} at {address}")
 
 # ML Model Operations
+def process_fire_detection(frame, camera_id):
+    """Process a single frame with fire detection model."""
+    try:
+        result = fire_model(frame, stream=True)
+        fire_detected = False
+        
+        for info in result:
+            boxes = info.boxes
+            for box in boxes:
+                confidence = box.conf[0]
+                confidence = math.ceil(confidence * 100)
+                Class = int(box.cls[0])
+                if confidence > 80:
+                    x1, y1, x2, y2 = box.xyxy[0]
+                    x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 5)
+                    cvzone.putTextRect(frame, f'{classnames[Class]} {confidence}%', 
+                                     [x1 + 8, y1 + 100], scale=1.5, thickness=2)
+                    fire_detected = True
+                    cv2.putText(frame, "ALERT!", (50, 150), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+        
+        st.session_state[f"fire_frame_{camera_id}"] = frame if fire_detected else None
+        return fire_detected
+    except Exception as e:
+        logger.error(f"Fire detection processing error: {str(e)}")
+        return False
+
 def run_fire_detection(camera_id, camera_name):
     """Run fire detection on a camera stream."""
     try:
@@ -437,24 +493,7 @@ def run_fire_detection(camera_id, camera_name):
                st.session_state.get(f"fire_active_{camera_id}", False)):
             if not frame_queue.empty():
                 frame = frame_queue.get()
-                
-                result = fire_model(frame, stream=True)
-                for info in result:
-                    boxes = info.boxes
-                    for box in boxes:
-                        confidence = box.conf[0]
-                        confidence = math.ceil(confidence * 100)
-                        Class = int(box.cls[0])
-                        if confidence > 80:
-                            x1, y1, x2, y2 = box.xyxy[0]
-                            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
-                            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 5)
-                            cvzone.putTextRect(frame, f'{classnames[Class]} {confidence}%', 
-                                             [x1 + 8, y1 + 100], scale=1.5, thickness=2)
-                            cv2.putText(frame, "ALERT!", (50, 150), 
-                                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-                
-                st.session_state[f"fire_frame_{camera_id}"] = frame
+                process_fire_detection(frame, camera_id)
             time.sleep(0.033)
             
         logger.info(f"Fire detection stopped for {camera_name}")
@@ -598,8 +637,13 @@ else:
         if st.session_state.get(f"stream_active_{camera_id}", False):
             error = st.session_state.get(f"stream_error_{camera_id}")
             frame = st.session_state.get(f"frame_{camera_id}")
+            
             if error:
                 live_placeholder.error(error)
+                # Attempt to reconnect
+                if st.button("Retry Connection", key=f"retry_{camera_id}"):
+                    st.session_state[f"stream_error_{camera_id}"] = None
+                    start_stream(cam['address'], camera_id)
             elif frame is not None:
                 live_placeholder.image(frame, caption=f"Live Feed: {cam['name']}", use_column_width=True)
             else:
@@ -618,7 +662,11 @@ else:
                 if fire_active:
                     st.session_state[f"fire_active_{camera_id}"] = False
                 else:
-                    threading.Thread(target=run_fire_detection, args=(camera_id, cam['name']), daemon=True).start()
+                    threading.Thread(
+                        target=run_fire_detection, 
+                        args=(camera_id, cam['name']), 
+                        daemon=True
+                    ).start()
         
         with col2:
             occ_active = st.session_state.get(f"occ_active_{camera_id}", False)
@@ -627,7 +675,11 @@ else:
                 if occ_active:
                     st.session_state[f"occ_active_{camera_id}"] = False
                 else:
-                    threading.Thread(target=run_occupancy_detection, args=(camera_id, cam['name']), daemon=True).start()
+                    threading.Thread(
+                        target=run_occupancy_detection, 
+                        args=(camera_id, cam['name']), 
+                        daemon=True
+                    ).start()
         
         with col3:
             no_access_active = st.session_state.get(f"no_access_active_{camera_id}", False)
@@ -636,7 +688,11 @@ else:
                 if no_access_active:
                     st.session_state[f"no_access_active_{camera_id}"] = False
                 else:
-                    threading.Thread(target=run_no_access_detection, args=(camera_id, cam['name']), daemon=True).start()
+                    threading.Thread(
+                        target=run_no_access_detection, 
+                        args=(camera_id, cam['name']), 
+                        daemon=True
+                    ).start()
         
         # Status indicators
         status_cols = st.columns(3)
