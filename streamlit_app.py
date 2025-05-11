@@ -259,9 +259,6 @@
 
 
 
-
-
-
 import streamlit as st
 import logging
 import threading
@@ -275,6 +272,7 @@ from fire_detection import fire_detection_loop, fire_model, classnames
 from occupancy_detection import occupancy_detection_loop
 from no_access_rooms import no_access_detection_loop
 import cvzone
+from queue import Queue
 
 # Configure logging for debugging
 logging.basicConfig(level=logging.DEBUG)
@@ -361,6 +359,7 @@ def add_camera(name, address):
         st.session_state.cameras.append(camera)
         camera_id = str(camera['_id'])
         st.session_state[f"stream_active_{camera_id}"] = True
+        st.session_state[f"frame_queue_{camera_id}"] = Queue(maxsize=10)  # Frame queue for this camera
         start_stream(camera['address'], camera_id)
         st.success(f"Added camera: {name}")
         logger.info(f"Added camera {name} with address {address}")
@@ -389,17 +388,30 @@ def capture_frame(address, camera_id):
         logger.error(f"Failed to open stream for camera_id {camera_id} at {address}")
         return
     logger.debug(f"Stream opened successfully for camera_id {camera_id}")
+    
+    frame_queue = st.session_state.get(f"frame_queue_{camera_id}")
+    
     while st.session_state.get(f"stream_active_{camera_id}", False):
         ret, frame = cap.read()
         if not ret:
             st.session_state[f"stream_error_{camera_id}"] = "Failed to capture frame. Stream may be unavailable."
             logger.error(f"Failed to capture frame for camera_id {camera_id}")
             break
+        
         # Process frame for display (resize and basic RGB conversion)
         frame = cv2.resize(frame, (640, 480))
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        
+        # Put frame in queue for other operations to use
+        if frame_queue:
+            if frame_queue.full():
+                frame_queue.get()  # Discard oldest frame if queue is full
+            frame_queue.put(frame.copy())
+        
+        # Store the latest frame for display
         st.session_state[f"frame_{camera_id}"] = frame
         time.sleep(0.033)  # ~30 FPS
+    
     cap.release()
     logger.debug(f"Stream closed for camera_id {camera_id}")
 
@@ -413,20 +425,22 @@ def start_stream(address, camera_id):
         logger.info(f"Started stream thread for camera_id {camera_id} at {address}")
 
 # ML Model Operations
-def run_fire_detection(address, camera_name):
+def run_fire_detection(camera_id, camera_name):
     """Run fire detection on a camera stream."""
     try:
-        logger.info(f"Starting fire detection for {camera_name} at {address}")
-        cap = cv2.VideoCapture(address)
-        if not cap.isOpened():
-            raise Exception("Failed to open stream for fire detection")
-        while st.session_state.get(f"stream_active_{camera_name}", False):
-            ret, frame = cap.read()
-            if not ret:
-                raise Exception("Failed to capture frame for fire detection")
-            frame = cv2.resize(frame, (640, 480))
+        logger.info(f"Starting fire detection for {camera_name}")
+        frame_queue = st.session_state.get(f"frame_queue_{camera_id}")
+        
+        if frame_queue is None:
+            raise Exception("Frame queue not initialized")
+            
+        while st.session_state.get(f"stream_active_{camera_id}", False) and not frame_queue.empty():
+            frame = frame_queue.get()
+            
+            # Process frame with fire detection model
             result = fire_model(frame, stream=True)
             fire_or_smoke_detected = False
+            
             for info in result:
                 boxes = info.boxes
                 for box in boxes:
@@ -442,36 +456,67 @@ def run_fire_detection(address, camera_name):
                         fire_or_smoke_detected = True
                         cv2.putText(frame, "ALERT!", (50, 150), 
                                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            st.session_state[f"fire_frame_{camera_name}"] = frame if fire_or_smoke_detected else None
+            
+            # Store the processed frame
+            st.session_state[f"fire_frame_{camera_id}"] = frame if fire_or_smoke_detected else None
             time.sleep(0.033)  # ~30 FPS
-        cap.release()
-        st.session_state[f"fire_result_{camera_name}"] = "Fire detection completed."
+            
+        st.session_state[f"fire_result_{camera_id}"] = "Fire detection completed."
         logger.info(f"Fire detection completed for {camera_name}")
     except Exception as e:
-        st.session_state[f"fire_result_{camera_name}"] = f"Fire detection error: {str(e)}"
+        st.session_state[f"fire_result_{camera_id}"] = f"Fire detection error: {str(e)}"
         logger.error(f"Fire detection error for {camera_name}: {str(e)}")
 
-def run_occupancy_detection(address, camera_name):
+def run_occupancy_detection(camera_id, camera_name):
     """Run occupancy detection on a camera stream."""
     try:
-        logger.info(f"Starting occupancy detection for {camera_name} at {address}")
-        occupancy_detection_loop(address, camera_name)
-        st.session_state[f"occ_result_{camera_name}"] = "Occupancy detection completed."
+        logger.info(f"Starting occupancy detection for {camera_name}")
+        frame_queue = st.session_state.get(f"frame_queue_{camera_id}")
+        
+        if frame_queue is None:
+            raise Exception("Frame queue not initialized")
+            
+        while st.session_state.get(f"stream_active_{camera_id}", False) and not frame_queue.empty():
+            frame = frame_queue.get()
+            
+            # Process frame with occupancy detection
+            processed_frame, count = occupancy_detection_loop(frame)
+            
+            # Store the processed frame and count
+            st.session_state[f"occ_frame_{camera_id}"] = processed_frame
+            st.session_state[f"occ_count_{camera_id}"] = count
+            time.sleep(0.033)  # ~30 FPS
+            
+        st.session_state[f"occ_result_{camera_id}"] = "Occupancy detection completed."
         logger.info(f"Occupancy detection completed for {camera_name}")
     except Exception as e:
-        st.session_state[f"occ_result_{camera_name}"] = f"Occupancy detection error: {str(e)}"
+        st.session_state[f"occ_result_{camera_id}"] = f"Occupancy detection error: {str(e)}"
         logger.error(f"Occupancy detection error for {camera_name}: {str(e)}")
 
-def run_no_access_detection(address, camera_name):
+def run_no_access_detection(camera_id, camera_name):
     """Run no-access room detection on a camera stream."""
     try:
-        logger.info(f"Starting no-access detection for {camera_name} at {address}")
-        no_access_detection_loop(address, camera_name)
-        st.session_state[f"no_access_result_{camera_name}"] = "No-access detection completed."
+        logger.info(f"Starting no-access detection for {camera_name}")
+        frame_queue = st.session_state.get(f"frame_queue_{camera_id}")
+        
+        if frame_queue is None:
+            raise Exception("Frame queue not initialized")
+            
+        while st.session_state.get(f"stream_active_{camera_id}", False) and not frame_queue.empty():
+            frame = frame_queue.get()
+            
+            # Process frame with no-access detection
+            processed_frame, alert = no_access_detection_loop(frame)
+            
+            # Store the processed frame and alert status
+            st.session_state[f"no_access_frame_{camera_id}"] = processed_frame
+            st.session_state[f"no_access_alert_{camera_id}"] = alert
+            time.sleep(0.033)  # ~30 FPS
+            
+        st.session_state[f"no_access_result_{camera_id}"] = "No-access detection completed."
         logger.info(f"No-access detection completed for {camera_name}")
     except Exception as e:
-        st.session_state[f"no_access_result_{camera_name}"] = f"No-access detection error: {str(e)}"
+        st.session_state[f"no_access_result_{camera_id}"] = f"No-access detection error: {str(e)}"
         logger.error(f"No-access detection error for {camera_name}: {str(e)}")
 
 # Initialize session state
@@ -480,6 +525,7 @@ if 'cameras' not in st.session_state:
     for cam in st.session_state.cameras:
         camera_id = str(cam['_id'])
         st.session_state[f"stream_active_{camera_id}"] = True
+        st.session_state[f"frame_queue_{camera_id}"] = Queue(maxsize=10)
         start_stream(cam['address'], camera_id)
 if 'confirm_remove' not in st.session_state:
     st.session_state.confirm_remove = None
@@ -541,51 +587,76 @@ st.header("📹 Live Footage and ML Operations")
 if not st.session_state.cameras:
     st.info("No live footage available. Add cameras to view live feeds.")
 else:
-    for i in range(0, len(st.session_state.cameras), 2):
-        cols = st.columns(2)
-        for j, col in enumerate(cols):
-            if i + j < len(st.session_state.cameras):
-                cam = st.session_state.cameras[i + j]
-                camera_id = str(cam['_id'])
-                with col:
-                    st.subheader(f"Camera: {cam['name']}")
-                    stream_placeholder = st.empty()
-                    if st.session_state.get(f"stream_active_{camera_id}", False):
-                        # Display fire detection frame if available, else default stream frame
-                        fire_frame = st.session_state.get(f"fire_frame_{cam['name']}")
-                        default_frame = st.session_state.get(f"frame_{camera_id}")
-                        frame = fire_frame if fire_frame is not None else default_frame
-                        error = st.session_state.get(f"stream_error_{camera_id}")
-                        if error:
-                            stream_placeholder.error(error)
-                        elif frame is not None:
-                            stream_placeholder.image(frame, caption=f"Live Feed: {cam['name']}", use_column_width=True)
-                        else:
-                            stream_placeholder.info("Connecting to stream...")
-                    
-                    # ML Model Operations
-                    st.markdown("**Run ML Detections**:")
-                    col_ml = st.columns(3)
-                    with col_ml[0]:
-                        if st.button("Fire Detection", key=f"fire_{i+j}"):
-                            threading.Thread(target=run_fire_detection, args=(cam['address'], cam['name']), daemon=True).start()
-                            st.info(f"Running fire detection for {cam['name']}...")
-                    with col_ml[1]:
-                        if st.button("Occupancy Detection", key=f"occ_{i+j}"):
-                            threading.Thread(target=run_occupancy_detection, args=(cam['address'], cam['name']), daemon=True).start()
-                            st.info(f"Running occupancy detection for {cam['name']}...")
-                    with col_ml[2]:
-                        if st.button("No-Access Detection", key=f"no_access_{i+j}"):
-                            threading.Thread(target=run_no_access_detection, args=(cam['address'], cam['name']), daemon=True).start()
-                            st.info(f"Running no-access detection for {cam['name']}...")
-
-                    # Display ML Results
-                    fire_result_key = f"fire_result_{cam['name']}"
-                    occ_result_key = f"occ_result_{cam['name']}"
-                    no_access_result_key = f"no_access_result_{cam['name']}"
-                    if fire_result_key in st.session_state:
-                        st.write(f"Fire Detection Result: {st.session_state[fire_result_key]}")
-                    if occ_result_key in st.session_state:
-                        st.write(f"Occupancy Detection Result: {st.session_state[occ_result_key]}")
-                    if no_access_result_key in st.session_state:
-                        st.write(f"No-Access Detection Result: {st.session_state[no_access_result_key]}")
+    for cam in st.session_state.cameras:
+        camera_id = str(cam['_id'])
+        
+        # Camera Feed Section
+        st.subheader(f"📷 {cam['name']} - Live Feed")
+        
+        # Create columns for the live feed and detection results
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Main live feed
+            live_placeholder = st.empty()
+            if st.session_state.get(f"stream_active_{camera_id}", False):
+                error = st.session_state.get(f"stream_error_{camera_id}")
+                frame = st.session_state.get(f"frame_{camera_id}")
+                if error:
+                    live_placeholder.error(error)
+                elif frame is not None:
+                    live_placeholder.image(frame, caption=f"Live Feed: {cam['name']}", use_column_width=True)
+                else:
+                    live_placeholder.info("Connecting to stream...")
+        
+        with col2:
+            # Detection results
+            st.subheader("Detection Results")
+            
+            # Fire detection
+            fire_frame = st.session_state.get(f"fire_frame_{camera_id}")
+            if fire_frame is not None:
+                st.image(fire_frame, caption="Fire Detection", use_column_width=True)
+            
+            # Occupancy detection
+            occ_frame = st.session_state.get(f"occ_frame_{camera_id}")
+            occ_count = st.session_state.get(f"occ_count_{camera_id}", 0)
+            if occ_frame is not None:
+                st.image(occ_frame, caption=f"Occupancy: {occ_count} people", use_column_width=True)
+            
+            # No-access detection
+            no_access_frame = st.session_state.get(f"no_access_frame_{camera_id}")
+            no_access_alert = st.session_state.get(f"no_access_alert_{camera_id}", False)
+            if no_access_frame is not None:
+                caption = "ALERT: Unauthorized access!" if no_access_alert else "No unauthorized access"
+                st.image(no_access_frame, caption=caption, use_column_width=True)
+        
+        # Operation Controls
+        st.subheader("Operations")
+        col_fire, col_occ, col_noacc = st.columns(3)
+        
+        with col_fire:
+            if st.button("Run Fire Detection", key=f"fire_{camera_id}"):
+                threading.Thread(target=run_fire_detection, args=(camera_id, cam['name']), daemon=True).start()
+                st.info(f"Running fire detection for {cam['name']}...")
+            fire_result = st.session_state.get(f"fire_result_{camera_id}")
+            if fire_result:
+                st.write(fire_result)
+        
+        with col_occ:
+            if st.button("Run Occupancy Detection", key=f"occ_{camera_id}"):
+                threading.Thread(target=run_occupancy_detection, args=(camera_id, cam['name']), daemon=True).start()
+                st.info(f"Running occupancy detection for {cam['name']}...")
+            occ_result = st.session_state.get(f"occ_result_{camera_id}")
+            if occ_result:
+                st.write(occ_result)
+        
+        with col_noacc:
+            if st.button("Run No-Access Detection", key=f"no_access_{camera_id}"):
+                threading.Thread(target=run_no_access_detection, args=(camera_id, cam['name']), daemon=True).start()
+                st.info(f"Running no-access detection for {cam['name']}...")
+            no_access_result = st.session_state.get(f"no_access_result_{camera_id}")
+            if no_access_result:
+                st.write(no_access_result)
+        
+        st.markdown("---")  # Separator between cameras
