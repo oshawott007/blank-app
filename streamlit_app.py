@@ -313,6 +313,270 @@
 
 
 
+# import pandas as pd
+# import streamlit as st
+# import logging
+# import numpy as np
+# import threading
+# from pymongo import MongoClient
+# from pymongo.errors import ServerSelectionTimeoutError, ConnectionFailure
+# from bson import ObjectId
+# import cv2
+# import time
+# from fire_detection import fire_detection_loop
+# from occupancy_detection import occupancy_detection_loop
+# from no_access_rooms import no_access_detection_loop
+
+# logging.basicConfig(level=logging.INFO)
+# logger = logging.getLogger(__name__)
+
+# # MongoDB Atlas connection
+# MONGO_URI = "mongodb+srv://infernapeamber:g9kASflhhSQ26GMF@cluster0.mjoloub.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+
+# try:
+#     client = MongoClient(
+#         MONGO_URI,
+#         serverSelectionTimeoutMS=5000,
+#         connectTimeoutMS=30000,
+#         socketTimeoutMS=30000
+#     )
+#     client.admin.command('ping')
+#     db = client['vigil']
+#     cameras_collection = db['cameras']
+#     st.success("Connected to MongoDB Atlas successfully!")
+# except (ServerSelectionTimeoutError, ConnectionFailure) as e:
+#     st.error(f"Failed to connect to MongoDB Atlas: {str(e)}")
+#     st.write("**Troubleshooting Steps**:")
+#     st.write("1. Verify MongoDB Atlas credentials")
+#     st.write("2. Set Network Access to allow connections from your IP in MongoDB Atlas")
+#     st.write("3. Ensure pymongo>=4.8.0 is in requirements.txt")
+#     st.write("4. Check cluster status (not paused) in MongoDB Atlas")
+#     client = None
+# except Exception as e:
+#     st.error(f"Unexpected error connecting to MongoDB Atlas: {str(e)}")
+#     client = None
+
+# # Database Operations
+# def add_camera_to_db(name, address):
+#     """Add a camera to MongoDB."""
+#     if client is None:
+#         st.error("MongoDB not connected. Cannot add camera.")
+#         return None
+#     camera = {"name": name, "address": address}
+#     cameras_collection.insert_one(camera)
+#     return camera
+
+# def get_cameras_from_db():
+#     """Retrieve all cameras from MongoDB."""
+#     if client is None:
+#         return []
+#     return list(cameras_collection.find())
+
+# def remove_camera_from_db(camera_id):
+#     """Remove a camera from MongoDB by its ID."""
+#     if client is None:
+#         st.error("MongoDB not connected. Cannot remove camera.")
+#         return
+#     cameras_collection.delete_one({"_id": ObjectId(camera_id)})
+
+# # Utility Functions
+# def add_camera(name, address):
+#     """Add a camera to MongoDB and update session state."""
+#     if not name or not address:
+#         st.error("Camera name and address are required.")
+#         return
+#     if any(cam['name'] == name for cam in st.session_state.cameras):
+#         st.error("Camera name must be unique.")
+#         return
+#     camera = add_camera_to_db(name, address)
+#     if camera:
+#         st.session_state.cameras.append(camera)
+#         st.session_state[f"stream_active_{camera['_id']}"] = True
+#         start_stream(camera['address'], str(camera['_id']))
+#         st.success(f"Added camera: {name}")
+
+# def remove_camera(index):
+#     """Remove a camera from MongoDB and update session state."""
+#     if 0 <= index < len(st.session_state.cameras):
+#         camera = st.session_state.cameras[index]
+#         camera_id = str(camera['_id'])
+#         if st.session_state.get(f"stream_active_{camera_id}", False):
+#             st.session_state[f"stream_active_{camera_id}"] = False
+#         remove_camera_from_db(camera['_id'])
+#         st.session_state.cameras.pop(index)
+#         st.session_state.confirm_remove = None
+#         st.success(f"Removed camera: {camera['name']}")
+
+# # Video Streaming Functions
+# def capture_frame(address, camera_id):
+#     """Capture frames from a camera stream and update session state."""
+#     cap = cv2.VideoCapture(address)
+#     if not cap.isOpened():
+#         st.session_state[f"stream_error_{camera_id}"] = "Failed to connect to camera stream."
+#         return
+#     while st.session_state.get(f"stream_active_{camera_id}", False):
+#         ret, frame = cap.read()
+#         if not ret:
+#             st.session_state[f"stream_error_{camera_id}"] = "Failed to capture frame."
+#             break
+#         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+#         st.session_state[f"frame_{camera_id}"] = frame
+#         time.sleep(0.033)  # ~30 FPS
+#     cap.release()
+
+# def start_stream(address, camera_id):
+#     """Start video stream in a separate thread."""
+#     if not st.session_state.get(f"stream_active_{camera_id}", False):
+#         st.session_state[f"stream_active_{camera_id}"] = True
+#         st.session_state[f"stream_error_{camera_id}"] = None
+#         threading.Thread(target=capture_frame, args=(address, camera_id), daemon=True).start()
+
+# # ML Model Operations
+# def run_fire_detection(address, camera_name):
+#     """Run fire detection for a specific camera."""
+#     try:
+#         fire_detection_loop(address, camera_name)
+#         st.session_state[f"fire_result_{camera_name}"] = "Fire detection completed."
+#     except Exception as e:
+#         st.session_state[f"fire_result_{camera_name}"] = f"Fire detection error: {str(e)}"
+
+# def run_occupancy_detection(address, camera_name):
+#     """Run occupancy detection for a specific camera."""
+#     try:
+#         occupancy_detection_loop(address, camera_name)
+#         st.session_state[f"occ_result_{camera_name}"] = "Occupancy detection completed."
+#     except Exception as e:
+#         st.session_state[f"occ_result_{camera_name}"] = f"Occupancy detection error: {str(e)}"
+
+# def run_no_access_detection(address, camera_name):
+#     """Run no-access room detection for a specific camera."""
+#     try:
+#         no_access_detection_loop(address, camera_name)
+#         st.session_state[f"no_access_result_{camera_name}"] = "No-access detection completed."
+#     except Exception as e:
+#         st.session_state[f"no_access_result_{camera_name}"] = f"No-access detection error: {str(e)}"
+
+# # Initialize session state
+# if 'cameras' not in st.session_state:
+#     st.session_state.cameras = get_cameras_from_db()
+#     for cam in st.session_state.cameras:
+#         camera_id = str(cam['_id'])
+#         st.session_state[f"stream_active_{camera_id}"] = True
+#         start_stream(cam['address'], camera_id)
+# if 'confirm_remove' not in st.session_state:
+#     st.session_state.confirm_remove = None
+
+# # Main App
+# st.title("📷 V.I.G.I.LLL - Video Intelligence for General Identification and Logging")
+
+# # Camera Management
+# st.header("📹 Camera Management")
+# st.write("Add, remove, and manage surveillance cameras connected to the system.")
+
+# with st.expander("➕ Add New Camera", expanded=True):
+#     with st.form("add_camera_form"):
+#         name = st.text_input("Camera Name", help="A unique identifier for the camera")
+#         address = st.text_input("Camera Address", help="RTSP or HTTP stream URL")
+#         submitted = st.form_submit_button("Add Camera")
+#         if submitted:
+#             if name and address:
+#                 if any(cam['name'] == name for cam in st.session_state.cameras):
+#                     st.error("Camera name must be unique.")
+#                 else:
+#                     add_camera(name, address)
+#                     st.rerun()
+#             else:
+#                 st.error("Both camera name and address are required.")
+
+# # Camera Table
+# st.header("📋 Camera List")
+# if not st.session_state.cameras:
+#     st.info("No cameras have been added yet. Add your first camera above.")
+# else:
+#     camera_data = [{"Name": cam['name'], "Address": cam['address'], "ID": str(cam['_id'])} for cam in st.session_state.cameras]
+#     df = pd.DataFrame(camera_data)
+#     st.table(df[["Name", "Address"]])
+    
+#     for i, cam in enumerate(st.session_state.cameras):
+#         if st.button(f"Remove {cam['name']}", key=f"remove_{i}"):
+#             st.session_state.confirm_remove = i
+
+# if st.session_state.confirm_remove is not None:
+#     cam = st.session_state.cameras[st.session_state.confirm_remove]
+#     st.warning(f"Confirm removal of camera: {cam['name']}")
+#     st.write(f"Address: {cam['address']}")
+#     col1, col2 = st.columns(2)
+#     with col1:
+#         if st.button("Confirm Removal"):
+#             remove_camera(st.session_state.confirm_remove)
+#             st.rerun()
+#     with col2:
+#         if st.button("Cancel"):
+#             st.session_state.confirm_remove = None
+#             st.rerun()
+
+# # Live Streams and ML Operations
+# st.header("📹 Live Streams and ML Operations")
+# if not st.session_state.cameras:
+#     st.info("No live streams available. Add cameras to view live feeds.")
+# else:
+#     for i in range(0, len(st.session_state.cameras), 2):
+#         cols = st.columns(2)
+#         for j, col in enumerate(cols):
+#             if i + j < len(st.session_state.cameras):
+#                 cam = st.session_state.cameras[i + j]
+#                 camera_id = str(cam['_id'])
+#                 with col:
+#                     st.subheader(f"Camera: {cam['name']}")
+#                     stream_placeholder = st.empty()
+#                     if st.session_state.get(f"stream_active_{camera_id}", False):
+#                         frame = st.session_state.get(f"frame_{camera_id}")
+#                         error = st.session_state.get(f"stream_error_{camera_id}")
+#                         if error:
+#                             stream_placeholder.error(error)
+#                         elif frame is not None:
+#                             stream_placeholder.image(frame, caption=f"Live Feed: {cam['name']}", use_column_width=True)
+#                         else:
+#                             stream_placeholder.info("Connecting to stream...")
+                    
+#                     # ML Model Operations
+#                     st.markdown("**Run ML Detections**:")
+#                     col_ml = st.columns(3)
+#                     with col_ml[0]:
+#                         if st.button("Fire Detection", key=f"fire_{i+j}"):
+#                             threading.Thread(target=run_fire_detection, args=(cam['address'], cam['name']), daemon=True).start()
+#                             st.info(f"Running fire detection for {cam['name']}...")
+#                     with col_ml[1]:
+#                         if st.button("Occupancy Detection", key=f"occ_{i+j}"):
+#                             threading.Thread(target=run_occupancy_detection, args=(cam['address'], cam['name']), daemon=True).start()
+#                             st.info(f"Running occupancy detection for {cam['name']}...")
+#                     with col_ml[2]:
+#                         if st.button("No-Access Detection", key=f"no_access_{i+j}"):
+#                             threading.Thread(target=run_no_access_detection, args=(cam['address'], cam['name']), daemon=True).start()
+#                             st.info(f"Running no-access detection for {cam['name']}...")
+
+#                     # Display ML Results
+#                     fire_result_key = f"fire_result_{cam['name']}"
+#                     occ_result_key = f"occ_result_{cam['name']}"
+#                     no_access_result_key = f"no_access_result_{cam['name']}"
+#                     if fire_result_key in st.session_state:
+#                         st.write(f"Fire Detection Result: {st.session_state[fire_result_key]}")
+#                     if occ_result_key in st.session_state:
+#                         st.write(f"Occupancy Detection Result: {st.session_state[occ_result_key]}")
+#                     if no_access_result_key in st.session_state:
+#                         st.write(f"No-Access Detection Result: {st.session_state[no_access_result_key]}")
+
+
+
+
+
+
+
+
+
+
+
+
 import pandas as pd
 import streamlit as st
 import logging
@@ -391,8 +655,9 @@ def add_camera(name, address):
     camera = add_camera_to_db(name, address)
     if camera:
         st.session_state.cameras.append(camera)
-        st.session_state[f"stream_active_{camera['_id']}"] = True
-        start_stream(camera['address'], str(camera['_id']))
+        camera_id = str(camera['_id'])
+        st.session_state[f"stream_active_{camera_id}"] = True
+        start_stream(camera['address'], camera_id)
         st.success(f"Added camera: {name}")
 
 def remove_camera(index):
@@ -493,13 +758,16 @@ st.header("📋 Camera List")
 if not st.session_state.cameras:
     st.info("No cameras have been added yet. Add your first camera above.")
 else:
-    camera_data = [{"Name": cam['name'], "Address": cam['address'], "ID": str(cam['_id'])} for cam in st.session_state.cameras]
-    df = pd.DataFrame(camera_data)
-    st.table(df[["Name", "Address"]])
-    
+    st.write("**Added Cameras**:")
     for i, cam in enumerate(st.session_state.cameras):
-        if st.button(f"Remove {cam['name']}", key=f"remove_{i}"):
-            st.session_state.confirm_remove = i
+        col1, col2, col3 = st.columns([2, 4, 1])
+        with col1:
+            st.markdown(f"**{cam['name']}**")
+        with col2:
+            st.code(cam['address'], language="text")
+        with col3:
+            if st.button("Remove", key=f"remove_{i}"):
+                st.session_state.confirm_remove = i
 
 if st.session_state.confirm_remove is not None:
     cam = st.session_state.cameras[st.session_state.confirm_remove]
