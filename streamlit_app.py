@@ -285,12 +285,15 @@ if page == "Camera Management":
                     st.info(f"Running no-access detection for {cam['name']}...")
 
             # Display ML Results
-            if f"fire_result_{cam['name']}" in st.session_state:
-                st.write(f"Fire Detection Result: {st.session_state[f'fire_result_{cam['name']}']}")
-            if f"occ_result_{cam['name']}" in st.session_state:
-                st.write(f"Occupancy Detection Result: {st.session_state[f'occ_result_{cam['name']}']}")
-            if f"no_access_result_{cam['name']}" in st.session_state:
-                st.write(f"No-Access Detection Result: {st.session_state[f'no_access_result_{cam['name']}']}")
+            fire_result_key = f"fire_result_{cam['name']}"
+            occ_result_key = f"occ_result_{cam['name']}"
+            no_access_result_key = f"no_access_result_{cam['name']}"
+            if fire_result_key in st.session_state:
+                st.write(f"Fire Detection Result: {st.session_state[fire_result_key]}")
+            if occ_result_key in st.session_state:
+                st.write(f"Occupancy Detection Result: {st.session_state[occ_result_key]}")
+            if no_access_result_key in st.session_state:
+                st.write(f"No-Access Detection Result: {st.session_state[no_access_result_key]}")
 
             st.markdown("---")
 
