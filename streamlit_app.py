@@ -3,10 +3,19 @@
 # from PIL import Image
 # import io
 # import time
-# from datetime import datetime
+# from datetime import datetime, timedelta
 # import base64
 # import json
 # import os
+# import cv2
+# import numpy as np
+# import pandas as pd
+# import matplotlib.pyplot as plt
+# import plotly.express as px
+# import plotly.graph_objects as go
+# import threading
+# from collections import defaultdict
+# import uuid
 
 # # Function to load cameras from JSON file
 # def load_cameras():
@@ -20,6 +29,10 @@
 #                         camera['last_frame'] = None
 #                     if 'status' not in camera:
 #                         camera['status'] = "Connecting..."
+#                     if 'detection_active' not in camera:
+#                         camera['detection_active'] = False
+#                     if 'camera_id' not in camera:
+#                         camera['camera_id'] = str(uuid.uuid4())
 #                 return cameras
 #         else:
 #             return []
@@ -35,7 +48,9 @@
 #         for camera in cameras:
 #             cameras_to_save.append({
 #                 'name': camera['name'],
-#                 'url': camera['url']
+#                 'url': camera['url'],
+#                 'camera_id': camera.get('camera_id', str(uuid.uuid4())),
+#                 'detection_active': camera.get('detection_active', False)
 #             })
         
 #         with open('cameras.json', 'w') as file:
@@ -43,6 +58,43 @@
 #         return True
 #     except Exception as e:
 #         st.error(f"Error saving cameras: {str(e)}")
+#         return False
+
+# # Function to load occupancy history
+# def load_occupancy_history():
+#     try:
+#         if os.path.exists('occupancy_history.json'):
+#             with open('occupancy_history.json', 'r') as file:
+#                 history = json.load(file)
+#                 return history
+#         else:
+#             return {}
+#     except Exception as e:
+#         st.error(f"Error loading occupancy history: {str(e)}")
+#         return {}
+
+# # Function to save occupancy history
+# def save_occupancy_data(camera_id, timestamp, count):
+#     try:
+#         # Load existing data
+#         history = load_occupancy_history()
+        
+#         # Initialize camera entry if it doesn't exist
+#         if camera_id not in history:
+#             history[camera_id] = []
+        
+#         # Add new entry
+#         history[camera_id].append({
+#             'timestamp': timestamp,
+#             'count': count
+#         })
+        
+#         # Save updated data
+#         with open('occupancy_history.json', 'w') as file:
+#             json.dump(history, file, indent=4)
+#         return True
+#     except Exception as e:
+#         st.error(f"Error saving occupancy data: {str(e)}")
 #         return False
 
 # # Function to get a single frame from MJPEG stream
@@ -78,9 +130,188 @@
 #     except Exception as e:
 #         return None, f"Error: {str(e)}"
 
-# # Function to convert image bytes to base64 for embedding in HTML
-# def image_to_base64(image_bytes):
-#     return base64.b64encode(image_bytes).decode('utf-8')
+# # Human detection using OpenCV HOG detector
+# def detect_humans(image_bytes):
+#     try:
+#         # Convert bytes to numpy array
+#         nparr = np.frombuffer(image_bytes, np.uint8)
+#         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+#         # Initialize HOG detector
+#         hog = cv2.HOGDescriptor()
+#         hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+        
+#         # Detect people
+#         boxes, weights = hog.detectMultiScale(img, winStride=(8,8))
+        
+#         # Count people
+#         person_count = len(boxes)
+        
+#         # Draw bounding boxes if people detected
+#         if person_count > 0:
+#             for (x, y, w, h) in boxes:
+#                 cv2.rectangle(img, (x, y), (x+w, y+h), (0, 255, 0), 2)
+            
+#             # Add count text
+#             cv2.putText(img, f'People: {person_count}', (10, 30), 
+#                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+        
+#         # Convert back to JPEG
+#         _, buffer = cv2.imencode('.jpg', img)
+#         jpg_bytes = buffer.tobytes()
+        
+#         return person_count, jpg_bytes
+#     except Exception as e:
+#         st.error(f"Detection error: {str(e)}")
+#         return 0, image_bytes
+
+# # Function to create hourly occupancy line graph
+# def create_hourly_graph(camera_id):
+#     try:
+#         # Load occupancy data
+#         history = load_occupancy_history()
+        
+#         if camera_id not in history or not history[camera_id]:
+#             return None
+        
+#         # Convert to DataFrame
+#         df = pd.DataFrame(history[camera_id])
+#         df['timestamp'] = pd.to_datetime(df['timestamp'])
+        
+#         # Group by hour and get maximum count
+#         df['hour'] = df['timestamp'].dt.floor('H')
+#         hourly_max = df.groupby('hour')['count'].max().reset_index()
+        
+#         # Last 24 hours only
+#         last_24h = datetime.now() - timedelta(hours=24)
+#         hourly_max = hourly_max[hourly_max['hour'] >= last_24h]
+        
+#         # Create graph
+#         fig = px.line(
+#             hourly_max, 
+#             x='hour', 
+#             y='count',
+#             title='Maximum Occupancy by Hour (Last 24 Hours)',
+#             labels={'hour': 'Time', 'count': 'Max People Count'}
+#         )
+        
+#         return fig
+#     except Exception as e:
+#         st.error(f"Error creating hourly graph: {str(e)}")
+#         return None
+
+# # Function to create circular occupancy graph (24-hour clock)
+# def create_circular_graph(camera_id):
+#     try:
+#         # Load occupancy data
+#         history = load_occupancy_history()
+        
+#         if camera_id not in history or not history[camera_id]:
+#             return None
+        
+#         # Convert to DataFrame
+#         df = pd.DataFrame(history[camera_id])
+#         df['timestamp'] = pd.to_datetime(df['timestamp'])
+        
+#         # Last 24 hours only
+#         last_24h = datetime.now() - timedelta(hours=24)
+#         df = df[df['timestamp'] >= last_24h]
+        
+#         if df.empty:
+#             return None
+        
+#         # Create binary occupancy (0 or 1)
+#         df['occupied'] = df['count'].apply(lambda x: 1 if x > 0 else 0)
+        
+#         # Extract hours and minutes for polar coordinates
+#         df['hour'] = df['timestamp'].dt.hour
+#         df['minute'] = df['timestamp'].dt.minute
+        
+#         # Convert to angle (0 to 2π)
+#         df['angle'] = 2 * np.pi * (df['hour'] + df['minute']/60) / 24
+        
+#         # Create radius (all points at same distance from center)
+#         df['radius'] = 1
+        
+#         # Convert to cartesian coordinates
+#         df['x'] = df['radius'] * np.cos(df['angle'])
+#         df['y'] = df['radius'] * np.sin(df['angle'])
+        
+#         # Create scatter plot with polar coordinates
+#         fig = go.Figure()
+        
+#         # Add occupied points (1)
+#         occupied = df[df['occupied'] == 1]
+#         fig.add_trace(go.Scatter(
+#             x=occupied['x'], 
+#             y=occupied['y'],
+#             mode='markers',
+#             marker=dict(color='green', size=8),
+#             name='Occupied'
+#         ))
+        
+#         # Add unoccupied points (0)
+#         unoccupied = df[df['occupied'] == 0]
+#         fig.add_trace(go.Scatter(
+#             x=unoccupied['x'], 
+#             y=unoccupied['y'],
+#             mode='markers',
+#             marker=dict(color='red', size=8),
+#             name='Empty'
+#         ))
+        
+#         # Add circle for reference
+#         theta = np.linspace(0, 2*np.pi, 100)
+#         fig.add_trace(go.Scatter(
+#             x=np.cos(theta),
+#             y=np.sin(theta),
+#             mode='lines',
+#             line=dict(color='gray', width=1),
+#             name='24-Hour Clock'
+#         ))
+        
+#         # Add hour markers
+#         for hour in range(24):
+#             angle = 2 * np.pi * hour / 24
+#             x = 1.1 * np.cos(angle)
+#             y = 1.1 * np.sin(angle)
+#             fig.add_annotation(
+#                 x=x, y=y,
+#                 text=str(hour),
+#                 showarrow=False
+#             )
+        
+#         # Update layout
+#         fig.update_layout(
+#             title='24-Hour Occupancy (Last 24 Hours)',
+#             xaxis=dict(
+#                 showgrid=False,
+#                 zeroline=False,
+#                 showticklabels=False,
+#                 range=[-1.2, 1.2]
+#             ),
+#             yaxis=dict(
+#                 showgrid=False,
+#                 zeroline=False,
+#                 showticklabels=False,
+#                 range=[-1.2, 1.2],
+#                 scaleanchor="x",
+#                 scaleratio=1
+#             ),
+#             legend=dict(
+#                 yanchor="top",
+#                 y=0.99,
+#                 xanchor="left",
+#                 x=0.01
+#             ),
+#             width=600,
+#             height=600
+#         )
+        
+#         return fig
+#     except Exception as e:
+#         st.error(f"Error creating circular graph: {str(e)}")
+#         return None
 
 # # Initialize session state
 # if 'initialized' not in st.session_state:
@@ -89,9 +320,10 @@
 #     st.session_state.last_refresh = datetime.now()
 #     st.session_state.initialized = True
 #     st.session_state.save_success = None
+#     st.session_state.active_history_camera = None
 
 # # App title
-# st.title("IP Camera Viewer")
+# st.title("IP Camera Viewer with Occupancy Detection")
 
 # # Camera addition form
 # st.subheader("Add Camera")
@@ -117,7 +349,9 @@
 #                 "name": camera_name,
 #                 "url": camera_url,
 #                 "last_frame": None,
-#                 "status": "Connecting..."
+#                 "status": "Connecting...",
+#                 "detection_active": False,
+#                 "camera_id": str(uuid.uuid4())
 #             }
 #             st.session_state.cameras.append(new_camera)
 #             # Save to JSON file
@@ -195,7 +429,18 @@
 #     for i, camera in enumerate(st.session_state.cameras):
 #         frame_data, error = get_mjpeg_frame(camera['url'])
 #         if frame_data:
-#             st.session_state.cameras[i]["last_frame"] = frame_data
+#             # If detection is active, process the frame
+#             if camera.get('detection_active', False):
+#                 count, processed_frame = detect_humans(frame_data)
+#                 st.session_state.cameras[i]["last_frame"] = processed_frame
+#                 st.session_state.cameras[i]["person_count"] = count
+                
+#                 # Save occupancy data
+#                 timestamp = datetime.now().isoformat()
+#                 save_occupancy_data(camera['camera_id'], timestamp, count)
+#             else:
+#                 st.session_state.cameras[i]["last_frame"] = frame_data
+                
 #             st.session_state.cameras[i]["status"] = "Connected"
 #         else:
 #             st.session_state.cameras[i]["status"] = f"Error: {error}"
@@ -216,7 +461,16 @@
 #         if idx < num_cameras:
 #             with cols[0]:
 #                 camera = st.session_state.cameras[idx]
-#                 st.markdown(f"### {camera['name']}")
+                
+#                 # Camera title with view history button
+#                 title_col1, title_col2 = st.columns([3, 1])
+#                 with title_col1:
+#                     st.markdown(f"### {camera['name']}")
+#                 with title_col2:
+#                     if st.button("View History", key=f"history_{idx}"):
+#                         st.session_state.active_history_camera = camera['camera_id']
+#                         st.experimental_rerun()
+                
 #                 status = st.empty()
 #                 frame_place = st.empty()
                 
@@ -245,13 +499,38 @@
 #                         frame_place.image(image, use_column_width=True)
 #                     except Exception as e:
 #                         status.error(f"Error displaying image: {str(e)}")
+                
+#                 # Occupancy detection toggle
+#                 detection_active = camera.get('detection_active', False)
+#                 if st.button(
+#                     "Stop Occupancy Detection" if detection_active else "Start Occupancy Detection", 
+#                     key=f"detect_btn_{idx}"
+#                 ):
+#                     # Toggle detection state
+#                     st.session_state.cameras[idx]['detection_active'] = not detection_active
+#                     # Save changes to JSON file
+#                     save_cameras(st.session_state.cameras)
+#                     st.experimental_rerun()
+                
+#                 # Show current count if detection is active
+#                 if detection_active and 'person_count' in camera:
+#                     st.metric("Current People Count", camera['person_count'])
         
 #         # Second camera in row
 #         idx = row * 2 + 1
 #         if idx < num_cameras:
 #             with cols[1]:
 #                 camera = st.session_state.cameras[idx]
-#                 st.markdown(f"### {camera['name']}")
+                
+#                 # Camera title with view history button
+#                 title_col1, title_col2 = st.columns([3, 1])
+#                 with title_col1:
+#                     st.markdown(f"### {camera['name']}")
+#                 with title_col2:
+#                     if st.button("View History", key=f"history_{idx}"):
+#                         st.session_state.active_history_camera = camera['camera_id']
+#                         st.experimental_rerun()
+                
 #                 status = st.empty()
 #                 frame_place = st.empty()
                 
@@ -280,28 +559,67 @@
 #                         frame_place.image(image, use_column_width=True)
 #                     except Exception as e:
 #                         status.error(f"Error displaying image: {str(e)}")
+                
+#                 # Occupancy detection toggle
+#                 detection_active = camera.get('detection_active', False)
+#                 if st.button(
+#                     "Stop Occupancy Detection" if detection_active else "Start Occupancy Detection", 
+#                     key=f"detect_btn_{idx}"
+#                 ):
+#                     # Toggle detection state
+#                     st.session_state.cameras[idx]['detection_active'] = not detection_active
+#                     # Save changes to JSON file
+#                     save_cameras(st.session_state.cameras)
+#                     st.experimental_rerun()
+                
+#                 # Show current count if detection is active
+#                 if detection_active and 'person_count' in camera:
+#                     st.metric("Current People Count", camera['person_count'])
 # else:
 #     st.info("No cameras added yet. Please add a camera using the form above.")
 
+# # Display history graphs if a camera is selected
+# if st.session_state.active_history_camera:
+#     # Find the camera name for the selected camera ID
+#     camera_name = "Unknown Camera"
+#     for cam in st.session_state.cameras:
+#         if cam.get('camera_id') == st.session_state.active_history_camera:
+#             camera_name = cam['name']
+#             break
+    
+#     st.markdown("---")
+#     st.subheader(f"Occupancy History for {camera_name}")
+    
+#     # Add close button
+#     if st.button("Close History View"):
+#         st.session_state.active_history_camera = None
+#         st.experimental_rerun()
+    
+#     # Create graphs
+#     col1, col2 = st.columns(2)
+    
+#     with col1:
+#         st.subheader("Hourly Maximum Occupancy")
+#         hourly_fig = create_hourly_graph(st.session_state.active_history_camera)
+#         if hourly_fig:
+#             st.plotly_chart(hourly_fig, use_container_width=True)
+#         else:
+#             st.info("No occupancy data available for this camera yet.")
+    
+#     with col2:
+#         st.subheader("24-Hour Occupancy Clock")
+#         circular_fig = create_circular_graph(st.session_state.active_history_camera)
+#         if circular_fig:
+#             st.plotly_chart(circular_fig, use_container_width=True)
+#         else:
+#             st.info("No occupancy data available for this camera yet.")
+
 # # Add note about persistence
 # st.markdown("---")
-# st.caption("Camera settings are saved in 'cameras.json' and will persist between application sessions.")
+# st.caption("Camera settings are saved in 'cameras.json' and occupancy data in 'occupancy_history.json'.")
 
 # # Update every few seconds but avoid complete page rerun
 # time.sleep(1)  # Short sleep to prevent hogging resources
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -310,7 +628,7 @@ import requests
 from PIL import Image
 import io
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import base64
 import json
 import os
@@ -380,7 +698,7 @@ def load_occupancy_history():
         st.error(f"Error loading occupancy history: {str(e)}")
         return {}
 
-# Function to save occupancy history
+# Function to save occupancy data
 def save_occupancy_data(camera_id, timestamp, count):
     try:
         # Load existing data
@@ -472,8 +790,8 @@ def detect_humans(image_bytes):
         st.error(f"Detection error: {str(e)}")
         return 0, image_bytes
 
-# Function to create hourly occupancy line graph
-def create_hourly_graph(camera_id):
+# Function to create hourly occupancy line graph for a specific date
+def create_hourly_graph(camera_id, selected_date=None):
     try:
         # Load occupancy data
         history = load_occupancy_history()
@@ -485,30 +803,60 @@ def create_hourly_graph(camera_id):
         df = pd.DataFrame(history[camera_id])
         df['timestamp'] = pd.to_datetime(df['timestamp'])
         
+        # Filter by date if specified
+        if selected_date:
+            df = df[df['timestamp'].dt.date == selected_date]
+            if df.empty:
+                return None
+        else:
+            # Last 24 hours only if no date specified
+            last_24h = datetime.now() - timedelta(hours=24)
+            df = df[df['timestamp'] >= last_24h]
+        
         # Group by hour and get maximum count
         df['hour'] = df['timestamp'].dt.floor('H')
         hourly_max = df.groupby('hour')['count'].max().reset_index()
         
-        # Last 24 hours only
-        last_24h = datetime.now() - timedelta(hours=24)
-        hourly_max = hourly_max[hourly_max['hour'] >= last_24h]
-        
         # Create graph
+        title = f"Hourly Maximum Occupancy - {selected_date.strftime('%Y-%m-%d')}" if selected_date else "Hourly Maximum Occupancy (Last 24 Hours)"
+        
         fig = px.line(
             hourly_max, 
             x='hour', 
             y='count',
-            title='Maximum Occupancy by Hour (Last 24 Hours)',
-            labels={'hour': 'Time', 'count': 'Max People Count'}
+            title=title,
+            labels={'hour': 'Hour of Day', 'count': 'Maximum People Count'}
         )
+        
+        # Customize layout
+        fig.update_layout(
+            xaxis=dict(
+                title='Hour of Day',
+                gridcolor='lightgray',
+                showgrid=True
+            ),
+            yaxis=dict(
+                title='Maximum People Count',
+                gridcolor='lightgray',
+                showgrid=True
+            ),
+            plot_bgcolor='white',
+            paper_bgcolor='white',
+            font=dict(size=12),
+            margin=dict(l=40, r=40, t=50, b=40),
+            hovermode='x unified'
+        )
+        
+        # Set line color to blue
+        fig.update_traces(line=dict(color='blue', width=2))
         
         return fig
     except Exception as e:
         st.error(f"Error creating hourly graph: {str(e)}")
         return None
 
-# Function to create circular occupancy graph (24-hour clock)
-def create_circular_graph(camera_id):
+# Function to create circular occupancy graph (24-hour clock) for a specific date
+def create_circular_graph(camera_id, selected_date=None):
     try:
         # Load occupancy data
         history = load_occupancy_history()
@@ -520,9 +868,15 @@ def create_circular_graph(camera_id):
         df = pd.DataFrame(history[camera_id])
         df['timestamp'] = pd.to_datetime(df['timestamp'])
         
-        # Last 24 hours only
-        last_24h = datetime.now() - timedelta(hours=24)
-        df = df[df['timestamp'] >= last_24h]
+        # Filter by date if specified
+        if selected_date:
+            df = df[df['timestamp'].dt.date == selected_date]
+            if df.empty:
+                return None
+        else:
+            # Last 24 hours only if no date specified
+            last_24h = datetime.now() - timedelta(hours=24)
+            df = df[df['timestamp'] >= last_24h]
         
         if df.empty:
             return None
@@ -537,35 +891,28 @@ def create_circular_graph(camera_id):
         # Convert to angle (0 to 2π)
         df['angle'] = 2 * np.pi * (df['hour'] + df['minute']/60) / 24
         
-        # Create radius (all points at same distance from center)
-        df['radius'] = 1
-        
         # Convert to cartesian coordinates
-        df['x'] = df['radius'] * np.cos(df['angle'])
-        df['y'] = df['radius'] * np.sin(df['angle'])
+        df['x'] = np.cos(df['angle'])
+        df['y'] = np.sin(df['angle'])
         
         # Create scatter plot with polar coordinates
         fig = go.Figure()
         
-        # Add occupied points (1)
-        occupied = df[df['occupied'] == 1]
-        fig.add_trace(go.Scatter(
-            x=occupied['x'], 
-            y=occupied['y'],
-            mode='markers',
-            marker=dict(color='green', size=8),
-            name='Occupied'
-        ))
-        
-        # Add unoccupied points (0)
-        unoccupied = df[df['occupied'] == 0]
-        fig.add_trace(go.Scatter(
-            x=unoccupied['x'], 
-            y=unoccupied['y'],
-            mode='markers',
-            marker=dict(color='red', size=8),
-            name='Empty'
-        ))
+        # Add minute markers (thin lines from center)
+        for _, row in df.iterrows():
+            if row['occupied'] == 1:
+                color = 'orange'  # Use orange color for occupied points
+            else:
+                continue  # Skip unoccupied points
+            
+            fig.add_trace(go.Scatter(
+                x=[0, row['x']], 
+                y=[0, row['y']],
+                mode='lines',
+                line=dict(color=color, width=1),
+                hoverinfo='none',
+                showlegend=False
+            ))
         
         # Add circle for reference
         theta = np.linspace(0, 2*np.pi, 100)
@@ -573,8 +920,9 @@ def create_circular_graph(camera_id):
             x=np.cos(theta),
             y=np.sin(theta),
             mode='lines',
-            line=dict(color='gray', width=1),
-            name='24-Hour Clock'
+            line=dict(color='black', width=2),
+            hoverinfo='none',
+            showlegend=False
         ))
         
         # Add hour markers
@@ -582,15 +930,35 @@ def create_circular_graph(camera_id):
             angle = 2 * np.pi * hour / 24
             x = 1.1 * np.cos(angle)
             y = 1.1 * np.sin(angle)
+            
+            # Add hour label
             fig.add_annotation(
                 x=x, y=y,
-                text=str(hour),
-                showarrow=False
+                text=f"{hour}:00",
+                showarrow=False,
+                font=dict(size=10)
             )
+            
+            # Add tick mark
+            x1, y1 = np.cos(angle), np.sin(angle)
+            x2, y2 = 1.05 * np.cos(angle), 1.05 * np.sin(angle)
+            fig.add_shape(
+                type="line",
+                x0=x1, y0=y1,
+                x1=x2, y1=y2,
+                line=dict(color="black", width=1),
+            )
+        
+        # Add title
+        title = f"Minute-by-Minute Presence - {selected_date.strftime('%Y-%m-%d')}" if selected_date else "Minute-by-Minute Presence (Last 24 Hours)"
         
         # Update layout
         fig.update_layout(
-            title='24-Hour Occupancy (Last 24 Hours)',
+            title=dict(
+                text=title,
+                x=0.5,
+                xanchor='center'
+            ),
             xaxis=dict(
                 showgrid=False,
                 zeroline=False,
@@ -605,20 +973,34 @@ def create_circular_graph(camera_id):
                 scaleanchor="x",
                 scaleratio=1
             ),
-            legend=dict(
-                yanchor="top",
-                y=0.99,
-                xanchor="left",
-                x=0.01
-            ),
-            width=600,
-            height=600
+            plot_bgcolor='white',
+            paper_bgcolor='white',
+            margin=dict(l=20, r=20, t=50, b=20),
+            width=500,
+            height=500,
+            showlegend=False
         )
         
         return fig
     except Exception as e:
         st.error(f"Error creating circular graph: {str(e)}")
         return None
+
+# Get available dates for a camera
+def get_available_dates(camera_id):
+    try:
+        history = load_occupancy_history()
+        if camera_id not in history or not history[camera_id]:
+            return []
+        
+        df = pd.DataFrame(history[camera_id])
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        df['date'] = df['timestamp'].dt.date
+        
+        return sorted(df['date'].unique())
+    except Exception as e:
+        st.error(f"Error getting available dates: {str(e)}")
+        return []
 
 # Initialize session state
 if 'initialized' not in st.session_state:
@@ -628,6 +1010,7 @@ if 'initialized' not in st.session_state:
     st.session_state.initialized = True
     st.session_state.save_success = None
     st.session_state.active_history_camera = None
+    st.session_state.selected_date = None
 
 # App title
 st.title("IP Camera Viewer with Occupancy Detection")
@@ -776,6 +1159,7 @@ if st.session_state.cameras:
                 with title_col2:
                     if st.button("View History", key=f"history_{idx}"):
                         st.session_state.active_history_camera = camera['camera_id']
+                        st.session_state.selected_date = None  # Reset date selection
                         st.experimental_rerun()
                 
                 status = st.empty()
@@ -818,10 +1202,6 @@ if st.session_state.cameras:
                     # Save changes to JSON file
                     save_cameras(st.session_state.cameras)
                     st.experimental_rerun()
-                
-                # Show current count if detection is active
-                if detection_active and 'person_count' in camera:
-                    st.metric("Current People Count", camera['person_count'])
         
         # Second camera in row
         idx = row * 2 + 1
@@ -836,6 +1216,7 @@ if st.session_state.cameras:
                 with title_col2:
                     if st.button("View History", key=f"history_{idx}"):
                         st.session_state.active_history_camera = camera['camera_id']
+                        st.session_state.selected_date = None  # Reset date selection
                         st.experimental_rerun()
                 
                 status = st.empty()
@@ -878,10 +1259,6 @@ if st.session_state.cameras:
                     # Save changes to JSON file
                     save_cameras(st.session_state.cameras)
                     st.experimental_rerun()
-                
-                # Show current count if detection is active
-                if detection_active and 'person_count' in camera:
-                    st.metric("Current People Count", camera['person_count'])
 else:
     st.info("No cameras added yet. Please add a camera using the form above.")
 
@@ -897,29 +1274,41 @@ if st.session_state.active_history_camera:
     st.markdown("---")
     st.subheader(f"Occupancy History for {camera_name}")
     
-    # Add close button
-    if st.button("Close History View"):
-        st.session_state.active_history_camera = None
-        st.experimental_rerun()
+    # Add date selector
+    available_dates = get_available_dates(st.session_state.active_history_camera)
+    date_options = ["Last 24 Hours"] + [d.strftime("%Y-%m-%d") for d in available_dates]
+    
+    date_col1, date_col2, date_col3 = st.columns([2, 1, 1])
+    
+    with date_col1:
+        selected_date_str = st.selectbox("Select Date", date_options, index=0)
+        
+        if selected_date_str == "Last 24 Hours":
+            st.session_state.selected_date = None
+        else:
+            st.session_state.selected_date = datetime.strptime(selected_date_str, "%Y-%m-%d").date()
+    
+    with date_col3:
+        if st.button("Close History View"):
+            st.session_state.active_history_camera = None
+            st.experimental_rerun()
     
     # Create graphs
     col1, col2 = st.columns(2)
     
     with col1:
-        st.subheader("Hourly Maximum Occupancy")
-        hourly_fig = create_hourly_graph(st.session_state.active_history_camera)
-        if hourly_fig:
-            st.plotly_chart(hourly_fig, use_container_width=True)
-        else:
-            st.info("No occupancy data available for this camera yet.")
-    
-    with col2:
-        st.subheader("24-Hour Occupancy Clock")
-        circular_fig = create_circular_graph(st.session_state.active_history_camera)
+        circular_fig = create_circular_graph(st.session_state.active_history_camera, st.session_state.selected_date)
         if circular_fig:
             st.plotly_chart(circular_fig, use_container_width=True)
         else:
-            st.info("No occupancy data available for this camera yet.")
+            st.info("No occupancy data available for this camera on the selected date.")
+    
+    with col2:
+        hourly_fig = create_hourly_graph(st.session_state.active_history_camera, st.session_state.selected_date)
+        if hourly_fig:
+            st.plotly_chart(hourly_fig, use_container_width=True)
+        else:
+            st.info("No occupancy data available for this camera on the selected date.")
 
 # Add note about persistence
 st.markdown("---")
