@@ -700,9 +700,6 @@
 
 
 
-
-
-
 import streamlit as st
 import requests
 from PIL import Image
@@ -889,10 +886,17 @@ def create_hourly_graph(camera_id, selected_date=None):
         
         # Convert to DataFrame
         df = pd.DataFrame(history[camera_id])
-        # Use format='mixed' to handle various timestamp formats
-        df['timestamp'] = pd.to_datetime(df['timestamp'], format='mixed')
         
-        # Apply timezone info correctly - using pandas methods for timezone handling
+        # Ensure timestamp is a datetime object
+        df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+        
+        # Drop any rows where conversion failed
+        df = df.dropna(subset=['timestamp'])
+        
+        if df.empty:
+            return None
+        
+        # Apply timezone info correctly
         df['timestamp'] = df['timestamp'].apply(
             lambda x: x if x.tzinfo else pd.Timestamp(x).tz_localize(pytz.UTC)
         ).dt.tz_convert(IST)
@@ -982,10 +986,17 @@ def create_circular_graph(camera_id, selected_date=None):
         
         # Convert to DataFrame
         df = pd.DataFrame(history[camera_id])
-        # Use format='mixed' to handle various timestamp formats
-        df['timestamp'] = pd.to_datetime(df['timestamp'], format='mixed')
         
-        # Apply timezone info correctly - using pandas methods for timezone handling
+        # Ensure timestamp is a datetime object
+        df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+        
+        # Drop any rows where conversion failed
+        df = df.dropna(subset=['timestamp'])
+        
+        if df.empty:
+            return None
+        
+        # Apply timezone info correctly
         df['timestamp'] = df['timestamp'].apply(
             lambda x: x if x.tzinfo else pd.Timestamp(x).tz_localize(pytz.UTC)
         ).dt.tz_convert(IST)
@@ -1133,17 +1144,28 @@ def get_available_dates(camera_id):
             return []
         
         df = pd.DataFrame(history[camera_id])
-        # Use format='mixed' to handle various timestamp formats
-        df['timestamp'] = pd.to_datetime(df['timestamp'], format='mixed')
         
-        # Apply timezone info correctly - using pandas methods for timezone handling
+        # Ensure timestamp is a datetime object with error handling
+        df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+        
+        # Drop any rows where conversion failed
+        df = df.dropna(subset=['timestamp'])
+        
+        if df.empty:
+            return []
+        
+        # Apply timezone info correctly
         df['timestamp'] = df['timestamp'].apply(
             lambda x: x if x.tzinfo else pd.Timestamp(x).tz_localize(pytz.UTC)
         ).dt.tz_convert(IST)
         
+        # Extract the date component
         df['date'] = df['timestamp'].dt.date
         
-        return sorted(df['date'].unique())
+        # Get unique dates
+        unique_dates = df['date'].unique()
+        
+        return sorted(unique_dates)
     except Exception as e:
         st.error(f"Error getting available dates: {str(e)}")
         return []
@@ -1423,7 +1445,16 @@ if st.session_state.active_history_camera:
     
     # Add date selector
     available_dates = get_available_dates(st.session_state.active_history_camera)
-    date_options = ["Last 24 Hours"] + [d.strftime("%Y-%m-%d") for d in available_dates]
+    
+    # Format dates for display
+    date_options = ["Last 24 Hours"]
+    if available_dates and len(available_dates) > 0:
+        for d in available_dates:
+            if isinstance(d, date):
+                date_options.append(d.strftime("%Y-%m-%d"))
+            else:
+                # Just in case we get a string instead of a date object
+                date_options.append(str(d))
     
     date_col1, date_col2, date_col3 = st.columns([2, 1, 1])
     
