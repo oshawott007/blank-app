@@ -890,7 +890,12 @@ def create_hourly_graph(camera_id, selected_date=None):
         
         # Convert to DataFrame
         df = pd.DataFrame(history[camera_id])
-        df['timestamp'] = pd.to_datetime(df['timestamp']).dt.tz_localize(pytz.UTC).dt.tz_convert(IST)
+        # Use format='mixed' to handle various timestamp formats
+        df['timestamp'] = pd.to_datetime(df['timestamp'], format='mixed')
+        # Apply timezone info - first localize if naive timestamps, then convert to IST
+        df['timestamp'] = df['timestamp'].apply(
+            lambda x: x.tz_localize(pytz.UTC).tz_convert(IST) if x.tzinfo is None else x.tz_convert(IST)
+        )
         
         # Filter by date if specified
         if selected_date:
@@ -977,7 +982,12 @@ def create_circular_graph(camera_id, selected_date=None):
         
         # Convert to DataFrame
         df = pd.DataFrame(history[camera_id])
-        df['timestamp'] = pd.to_datetime(df['timestamp']).dt.tz_localize(pytz.UTC).dt.tz_convert(IST)
+        # Use format='mixed' to handle various timestamp formats
+        df['timestamp'] = pd.to_datetime(df['timestamp'], format='mixed')
+        # Apply timezone info - first localize if naive timestamps, then convert to IST
+        df['timestamp'] = df['timestamp'].apply(
+            lambda x: x.tz_localize(pytz.UTC).tz_convert(IST) if x.tzinfo is None else x.tz_convert(IST)
+        )
         
         # Filter by date if specified
         if selected_date:
@@ -1122,7 +1132,12 @@ def get_available_dates(camera_id):
             return []
         
         df = pd.DataFrame(history[camera_id])
-        df['timestamp'] = pd.to_datetime(df['timestamp']).dt.tz_localize(pytz.UTC).dt.tz_convert(IST)
+        # Use format='mixed' to handle various timestamp formats
+        df['timestamp'] = pd.to_datetime(df['timestamp'], format='mixed')
+        # Apply timezone info - first localize if naive timestamps, then convert to IST
+        df['timestamp'] = df['timestamp'].apply(
+            lambda x: x.tz_localize(pytz.UTC).tz_convert(IST) if x.tzinfo is None else x.tz_convert(IST)
+        )
         df['date'] = df['timestamp'].dt.date
         
         return sorted(df['date'].unique())
